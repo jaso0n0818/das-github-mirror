@@ -43,10 +43,18 @@ Check these boxes:
 |---|---|
 | Pull request | opened, closed, merged, edited, synchronize (new push), reopened |
 | Pull request review | submitted (APPROVED, CHANGES_REQUESTED, COMMENTED) |
+| Pull request review comment | created, edited, deleted (inline code review comments on diffs) |
 | Issues | opened, closed, reopened, transferred, deleted, labeled, unlabeled |
+| Issue comment | created, edited, deleted (comments on issues AND PR threads) |
 | Label | created, edited, deleted (repo-level label definitions) |
 
 **Note on issue label events:** The `labeled` and `unlabeled` actions come through the **Issues** event subscription, not the Label subscription. The Label subscription covers repo-level label CRUD (creating/renaming/deleting label definitions). You need both.
+
+**Note on comments:** GitHub has two distinct comment types:
+- **Issue comments** (`issue_comment` event) — covers both issue comments AND PR thread/conversation comments. These are general discussion comments.
+- **Pull request review comments** (`pull_request_review_comment` event) — inline comments on specific lines in a PR diff, attached to a review.
+
+Both are needed for full conversation thread coverage. Stored in `comments` and `review_comments` tables respectively.
 
 ### Other settings
 
@@ -233,6 +241,40 @@ sender.site_admin              → (not directly association — see note)
 - Store the association as NULL and let validators handle it
 
 This is a design decision worth noting — the label event handler may need an extra API call or a lookup to populate `actor_association`.
+
+### `issue_comment` event
+
+```
+action: created | edited | deleted
+comment.id                     → comment_id (BIGINT, globally unique)
+comment.user.id                → author_github_id
+comment.user.login             → author_login
+comment.author_association     → author_association
+comment.body                   → body (full text)
+comment.created_at
+comment.updated_at
+issue.number                   → issue_number (works for both issues AND PRs)
+issue.pull_request             → if present, this comment is on a PR thread (not a plain issue)
+```
+
+**Note:** GitHub treats PR thread comments as issue comments. The `issue.pull_request` field is present when the comment is on a PR. The `issue.number` is the PR number in that case.
+
+### `pull_request_review_comment` event
+
+```
+action: created | edited | deleted
+comment.id                     → comment_id (BIGINT, globally unique)
+comment.user.id                → reviewer_github_id
+comment.user.login             → reviewer_login
+comment.pull_request_review_id → review_id (links to reviews table)
+comment.path                   → file path in the diff
+comment.line                   → line number (nullable for outdated comments)
+comment.side                   → LEFT or RIGHT (base vs head)
+comment.body                   → body (full text)
+comment.created_at
+comment.updated_at
+pull_request.number            → pr_number
+```
 
 ### `label` event (repo-level)
 

@@ -31,7 +31,7 @@ GitHub event occurs
 
 ## Raw Tables (already defined)
 
-The existing schema in `packages/db/` covers 8 tables. These are the webhook write layer — upserted on every event, append-only where appropriate.
+The existing schema in `packages/db/` covers 10 tables. These are the webhook write layer — upserted on every event, append-only where appropriate.
 
 | Table | Purpose |
 |---|---|
@@ -39,6 +39,8 @@ The existing schema in `packages/db/` covers 8 tables. These are the webhook wri
 | `pull_requests` | One row per PR, upserted on state changes |
 | `issues` | One row per issue, upserted on state changes |
 | `reviews` | One row per review submission, append-only |
+| `comments` | Issue + PR thread comments, append-only (upsert on edit) |
+| `review_comments` | Inline code review comments on PR diffs, append-only (upsert on edit) |
 | `label_events` | Append-only log of every label add/remove |
 | `pr_files` | File-level change metadata (filename, status, additions, deletions) |
 | `pr_file_contents` | Actual file content (base + head versions) for AST/token scoring |
@@ -50,7 +52,22 @@ The `pull_requests.scoring_data_stored` flag indicates whether `pr_files` and `p
 
 ### Note on data retention
 
-Raw tables keep data indefinitely. Storage is ~45 MB/month at current scale. The 35-day lookback is a **scoring concern, not a storage concern** — views filter by time window, but historical data is preserved for trend analysis, audits, and dashboard use.
+Raw tables keep data indefinitely. Storage is ~45 MB/month at current scale (256 repos), with conversation threads (issue_comments + review_comments) adding <1 MB/month. The 35-day lookback is a **scoring concern, not a storage concern** — views filter by time window, but historical data is preserved for trend analysis, audits, and dashboard use.
+
+### Storage breakdown estimate (256 repos)
+
+| Table | Monthly growth | Notes |
+|---|---|---|
+| `pull_requests` | ~2 MB | Metadata only, one row per PR |
+| `issues` | ~1 MB | Metadata only, one row per issue |
+| `reviews` | ~500 KB | One row per review submission |
+| `comments` | ~500 KB | ~500 bytes/comment avg, covers issues + PR threads |
+| `review_comments` | ~300 KB | Inline code comments, includes file path + line |
+| `label_events` | ~200 KB | Append-only label log |
+| `pr_files` | ~3 MB | File-level change metadata per PR |
+| `pr_file_contents` | ~38 MB | Actual source code (pruned to 35-day window) |
+| `webhook_deliveries` | ~100 KB | Pruned periodically |
+| **Total** | **~45.5 MB** | Comments are negligible (<1% of total) |
 
 ---
 
