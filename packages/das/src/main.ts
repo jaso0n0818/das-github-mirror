@@ -1,7 +1,7 @@
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module";
 
-async function bootstrap() {
+async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule);
   const port = process.env.API_PORT || 3000;
 
@@ -9,4 +9,4 @@ async function bootstrap() {
     console.log("listening on port", port);
   });
 }
-bootstrap();
+void bootstrap();

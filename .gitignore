@@ -9,6 +9,7 @@ npm-debug.log*
 
 # Build outputs
 dist/
+coverage/
 
 # IDE
 .vscode/
