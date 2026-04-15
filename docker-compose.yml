@@ -14,6 +14,11 @@ services:
       - ./packages/db:/docker-entrypoint-initdb.d
     ports:
       - "127.0.0.1:5434:5432" # 5434 to avoid conflict with other Postgres instances on this host
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     networks:
       - github-mirror
 
@@ -25,6 +30,11 @@ services:
       - ./data/redis:/data
     ports:
       - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     networks:
       - github-mirror
 
@@ -39,8 +49,10 @@ services:
     ports:
       - "127.0.0.1:6969:6969"
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - github-mirror
 

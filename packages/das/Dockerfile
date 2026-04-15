@@ -18,6 +18,6 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./
 
-EXPOSE 3000
+EXPOSE 6969
 
 CMD ["node", "dist/main"]
