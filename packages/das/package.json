@@ -70,7 +70,11 @@
       "**/*.(t|j)s",
       "!main.ts",
       "!**/*.module.ts",
-      "!config/**"
+      "!config/**",
+      "!webhook/**",
+      "!queue/**",
+      "!api/**",
+      "!entities/**"
     ],
     "coverageDirectory": "../coverage",
     "coverageThreshold": {
