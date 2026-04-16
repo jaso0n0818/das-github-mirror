@@ -29,7 +29,7 @@ services:
     volumes:
       - ./data/redis:/data
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:6380:6379" # 6380 on host to avoid conflict with other Redis instances
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -48,6 +48,8 @@ services:
       - .env
     ports:
       - "127.0.0.1:6969:6969"
+    volumes:
+      - ./secrets:/app/secrets:ro
     depends_on:
       db:
         condition: service_healthy

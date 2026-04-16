@@ -28,3 +28,7 @@ Thumbs.db
 # Postgres data (local dev)
 data/
 .claude
+
+# GitHub App private keys, etc.
+secrets/
+*.pem
