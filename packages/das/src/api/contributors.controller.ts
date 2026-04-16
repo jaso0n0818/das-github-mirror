@@ -1,8 +1,17 @@
-import { Controller, Get, Param, Query } from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiParam, ApiQuery } from "@nestjs/swagger";
+import { Controller, Get, Param, Query, UseGuards } from "@nestjs/common";
+import {
+  ApiTags,
+  ApiOperation,
+  ApiParam,
+  ApiQuery,
+  ApiSecurity,
+} from "@nestjs/swagger";
+import { ApiKeyGuard } from "./api-key.guard";
 import { ContributorsService } from "./contributors.service";
 
 @ApiTags("Contributors")
+@ApiSecurity("api-key")
+@UseGuards(ApiKeyGuard)
 @Controller("api/v1/contributors")
 export class ContributorsController {
   constructor(private readonly contributorsService: ContributorsService) {}

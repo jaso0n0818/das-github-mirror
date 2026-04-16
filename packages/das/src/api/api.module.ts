@@ -8,6 +8,7 @@ import {
   PrFileContent,
   LabelEvent,
 } from "../entities";
+import { ApiKeyGuard } from "./api-key.guard";
 import { ContributorsController } from "./contributors.controller";
 import { ContributorsService } from "./contributors.service";
 
@@ -23,6 +24,6 @@ import { ContributorsService } from "./contributors.service";
     ]),
   ],
   controllers: [ContributorsController],
-  providers: [ContributorsService],
+  providers: [ContributorsService, ApiKeyGuard],
 })
 export class ApiModule {}
