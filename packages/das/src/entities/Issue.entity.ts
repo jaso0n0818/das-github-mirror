@@ -17,28 +17,28 @@ export class Issue {
   @Column({ name: "author_association", nullable: true })
   authorAssociation: string;
 
-  @Column({ nullable: true })
+  @Column({ type: "text", nullable: true })
   title: string | null;
 
   @Column()
   state: string;
 
-  @Column({ name: "state_reason", nullable: true })
+  @Column({ name: "state_reason", type: "varchar", nullable: true })
   stateReason: string | null;
 
-  @Column({ name: "created_at" })
+  @Column({ name: "created_at", type: "timestamp" })
   createdAt: string;
 
-  @Column({ name: "closed_at", nullable: true })
+  @Column({ name: "closed_at", type: "timestamp", nullable: true })
   closedAt: string;
 
-  @Column({ name: "updated_at", nullable: true })
+  @Column({ name: "updated_at", type: "timestamp", nullable: true })
   updatedAt: string;
 
   @Column({ type: "text", array: true, nullable: true })
   labels: string[] | null;
 
-  @Column({ name: "solved_by_pr", nullable: true })
+  @Column({ name: "solved_by_pr", type: "int", nullable: true })
   solvedByPr: number | null;
 
   @Column({ name: "is_transferred", default: false })

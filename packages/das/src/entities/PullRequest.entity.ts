@@ -17,22 +17,22 @@ export class PullRequest {
   @Column({ name: "author_association", nullable: true })
   authorAssociation: string;
 
-  @Column({ nullable: true })
+  @Column({ type: "text", nullable: true })
   title: string;
 
   @Column()
   state: string;
 
-  @Column({ name: "created_at" })
+  @Column({ name: "created_at", type: "timestamp" })
   createdAt: string;
 
-  @Column({ name: "closed_at", nullable: true })
+  @Column({ name: "closed_at", type: "timestamp", nullable: true })
   closedAt: string;
 
-  @Column({ name: "merged_at", nullable: true })
+  @Column({ name: "merged_at", type: "timestamp", nullable: true })
   mergedAt: string;
 
-  @Column({ name: "last_edited_at", nullable: true })
+  @Column({ name: "last_edited_at", type: "timestamp", nullable: true })
   lastEditedAt: string;
 
   @Column({ name: "merged_by_login", nullable: true })

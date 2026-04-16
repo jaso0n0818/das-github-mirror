@@ -11,15 +11,15 @@ export class PrFileContent {
   @PrimaryColumn()
   filename: string;
 
-  @Column({ name: "base_content", nullable: true })
+  @Column({ name: "base_content", type: "text", nullable: true })
   baseContent: string | null;
 
-  @Column({ name: "head_content", nullable: true })
+  @Column({ name: "head_content", type: "text", nullable: true })
   headContent: string | null;
 
   @Column({ name: "is_binary", default: false })
   isBinary: boolean;
 
-  @Column({ name: "byte_size", nullable: true })
+  @Column({ name: "byte_size", type: "int", nullable: true })
   byteSize: number | null;
 }

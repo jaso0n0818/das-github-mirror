@@ -8,7 +8,7 @@ export class LabelEvent {
   @Column({ name: "repo_full_name" })
   repoFullName: string;
 
-  @Column({ name: "target_number", nullable: true })
+  @Column({ name: "target_number", type: "int", nullable: true })
   targetNumber: number | null;
 
   @Column({ name: "target_type", default: "issue" })
@@ -20,15 +20,15 @@ export class LabelEvent {
   @Column()
   action: string;
 
-  @Column({ name: "actor_github_id", nullable: true })
+  @Column({ name: "actor_github_id", type: "varchar", nullable: true })
   actorGithubId: string | null;
 
-  @Column({ name: "actor_login", nullable: true })
+  @Column({ name: "actor_login", type: "varchar", nullable: true })
   actorLogin: string | null;
 
   @Column({ name: "actor_association", nullable: true })
   actorAssociation: string;
 
-  @Column()
+  @Column({ type: "timestamp" })
   timestamp: string;
 }

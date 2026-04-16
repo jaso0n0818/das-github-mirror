@@ -23,12 +23,12 @@ export class Comment {
   @Column({ name: "author_association", nullable: true })
   authorAssociation: string;
 
-  @Column({ nullable: true })
+  @Column({ type: "text", nullable: true })
   body: string;
 
-  @Column({ name: "created_at" })
+  @Column({ name: "created_at", type: "timestamp" })
   createdAt: string;
 
-  @Column({ name: "updated_at", nullable: true })
+  @Column({ name: "updated_at", type: "timestamp", nullable: true })
   updatedAt: string;
 }

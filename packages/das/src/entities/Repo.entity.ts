@@ -8,12 +8,12 @@ export class Repo {
   @Column({ name: "installation_id", type: "bigint", nullable: true })
   installationId: string | null;
 
-  @Column({ name: "webhook_secret", nullable: true })
+  @Column({ name: "webhook_secret", type: "varchar", nullable: true })
   webhookSecret: string | null;
 
-  @Column({ name: "added_at" })
+  @Column({ name: "added_at", type: "timestamp" })
   addedAt: string;
 
-  @Column({ name: "last_event_at", nullable: true })
+  @Column({ name: "last_event_at", type: "timestamp", nullable: true })
   lastEventAt: string | null;
 }
