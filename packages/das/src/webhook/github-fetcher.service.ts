@@ -5,7 +5,14 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { readFileSync } from "fs";
 import { sign } from "jsonwebtoken";
-import { Issue, PrFile, PrFileContent, PullRequest, Repo } from "../entities";
+import {
+  Issue,
+  PrFile,
+  PrFileContent,
+  PullRequest,
+  Repo,
+  Review,
+} from "../entities";
 
 interface InstallationToken {
   token: string;
@@ -35,6 +42,8 @@ export class GitHubFetcherService implements OnModuleInit {
     private readonly prRepo: Repository<PullRequest>,
     @InjectRepository(Issue)
     private readonly issueRepo: Repository<Issue>,
+    @InjectRepository(Review)
+    private readonly reviewRepo: Repository<Review>,
     @InjectRepository(Repo)
     private readonly repoRepo: Repository<Repo>,
   ) {
@@ -567,7 +576,19 @@ export class GitHubFetcherService implements OnModuleInit {
               additions
               deletions
               commits { totalCount }
-              labels(first: 20) { nodes { name } }
+              labels(first: 10) { nodes { name } }
+              reviews(first: 10) {
+                nodes {
+                  submittedAt
+                  state
+                  authorAssociation
+                  author {
+                    login
+                    ... on User { databaseId }
+                    ... on Bot { databaseId }
+                  }
+                }
+              }
             }
           }
         }
@@ -635,6 +656,24 @@ export class GitHubFetcherService implements OnModuleInit {
           },
           ["repoFullName", "prNumber"],
         );
+
+        // Upsert reviews captured in the same query
+        const reviewNodes = pr.reviews?.nodes ?? [];
+        for (const review of reviewNodes) {
+          if (!review?.submittedAt || !review?.author?.databaseId) continue;
+          await this.reviewRepo.upsert(
+            {
+              repoFullName,
+              prNumber: pr.number,
+              reviewerGithubId: String(review.author.databaseId),
+              reviewerLogin: review.author.login ?? null,
+              reviewerAssociation: review.authorAssociation ?? null,
+              reviewState: review.state,
+              submittedAt: review.submittedAt,
+            },
+            ["repoFullName", "prNumber", "reviewerGithubId", "submittedAt"],
+          );
+        }
 
         prs.push({ prNumber: pr.number, isMerged: !!pr.merged });
       }
