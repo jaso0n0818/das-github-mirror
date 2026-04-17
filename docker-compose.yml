@@ -1,6 +1,6 @@
 services:
   db:
-    container_name: github-mirror-db
+    container_name: ghm-db
     image: postgres:16-alpine
     restart: always
     env_file:
@@ -23,7 +23,7 @@ services:
       - github-mirror
 
   redis:
-    container_name: github-mirror-redis
+    container_name: ghm-redis
     image: redis:7-alpine
     restart: always
     volumes:
@@ -39,7 +39,7 @@ services:
       - github-mirror
 
   das:
-    container_name: github-mirror-das
+    container_name: ghm-das
     build:
       context: ./packages/das
       dockerfile: Dockerfile
