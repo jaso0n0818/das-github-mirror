@@ -12,6 +12,12 @@ interface InstallationToken {
   expiresAt: number;
 }
 
+// Files larger than this are stored with null content (AST parsing is wasteful past this).
+const MAX_FILE_SIZE_BYTES = 1_000_000;
+
+// Starting batch size for batched GraphQL file-content requests. Halves on failure.
+const GRAPHQL_FILES_BATCH_SIZE = 50;
+
 @Injectable()
 export class GitHubFetcherService implements OnModuleInit {
   private readonly logger = new Logger(GitHubFetcherService.name);
@@ -138,8 +144,15 @@ export class GitHubFetcherService implements OnModuleInit {
     return nodes.map((n: { number: number }) => n.number);
   }
 
-  // --- REST: PR files + contents ---
+  // --- PR files + contents (REST for list, batched GraphQL for contents) ---
 
+  /**
+   * Fetch the PR's file list (REST) and all file contents (batched GraphQL).
+   * GraphQL's object(expression: "SHA:path") returns content directly from git
+   * blobs, so it works even when fork branches are deleted post-merge. Files
+   * are fetched in batches of 50 to avoid GraphQL complexity limits; on
+   * failure the batch size halves down to a floor of 5.
+   */
   async fetchAndStorePrFiles(
     repoFullName: string,
     prNumber: number,
@@ -147,19 +160,19 @@ export class GitHubFetcherService implements OnModuleInit {
     const [owner, repo] = repoFullName.split("/");
     const token = await this.getTokenForRepo(repoFullName);
 
-    // Grab PR metadata for base/head SHAs
     const pr = await this.prRepo.findOneBy({ repoFullName, prNumber });
     if (!pr) {
       throw new Error(`PR ${repoFullName}#${prNumber} not found in DB`);
     }
 
-    // Fetch file list (paginated)
+    // 1. Fetch file list via REST
     const files = await this.fetchAllPrFiles(owner, repo, prNumber, token);
 
-    // Delete existing file data for this PR (in case of synchronize)
+    // Clear any stale data for this PR (e.g. after a synchronize event)
     await this.prFileRepo.delete({ repoFullName, prNumber });
     await this.prFileContentRepo.delete({ repoFullName, prNumber });
 
+    // 2. Upsert file metadata
     for (const file of files) {
       await this.prFileRepo.upsert(
         {
@@ -174,21 +187,26 @@ export class GitHubFetcherService implements OnModuleInit {
         },
         ["repoFullName", "prNumber", "filename"],
       );
-
-      // Fetch file contents for non-binary, non-removed files
-      if (file.status !== "removed" && !this.isBinary(file.filename)) {
-        await this.fetchAndStoreFileContent(
-          repoFullName,
-          prNumber,
-          file,
-          owner,
-          repo,
-          token,
-          pr.headSha,
-          pr.baseSha,
-        );
-      }
     }
+
+    // 3. Fetch file contents in batches (base + head in one GraphQL call each)
+    if (!pr.headSha) {
+      this.logger.warn(
+        `PR ${repoFullName}#${prNumber} has no head SHA — skipping content fetch`,
+      );
+      return;
+    }
+
+    await this.fetchAndStoreBatchedContents(
+      repoFullName,
+      prNumber,
+      files,
+      owner,
+      repo,
+      token,
+      pr.headSha,
+      pr.baseSha,
+    );
   }
 
   private async fetchAllPrFiles(
@@ -197,73 +215,187 @@ export class GitHubFetcherService implements OnModuleInit {
     prNumber: number,
     token: string,
   ): Promise<any[]> {
-    const files: any[] = [];
-    let page = 1;
+    const maxAttempts = 3;
+    let perPage = 100;
+    let attempt = 0;
 
-    while (true) {
-      const res = await fetch(
-        `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=100&page=${page}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: "application/vnd.github+json",
-          },
-        },
-      );
+    while (attempt < maxAttempts) {
+      try {
+        const files: any[] = [];
+        let page = 1;
 
-      if (!res.ok) {
-        throw new Error(
-          `Failed to fetch PR files: ${res.status} ${await res.text()}`,
+        while (true) {
+          const res = await fetch(
+            `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=${perPage}&page=${page}`,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: "application/vnd.github+json",
+              },
+            },
+          );
+
+          // Halve page size on server-side errors (large payload)
+          if ([502, 503, 504].includes(res.status)) {
+            perPage = Math.max(Math.floor(perPage / 2), 10);
+            throw new Error(
+              `status ${res.status}, retrying with per_page=${perPage}`,
+            );
+          }
+
+          if (!res.ok) {
+            throw new Error(
+              `Failed to fetch PR files: ${res.status} ${await res.text()}`,
+            );
+          }
+
+          const batch = await res.json();
+          files.push(...batch);
+
+          if (batch.length < perPage) return files;
+          page++;
+        }
+      } catch (err) {
+        attempt++;
+        if (attempt >= maxAttempts) throw err;
+        const delay = Math.min(5000 * 2 ** (attempt - 1), 30_000);
+        this.logger.warn(
+          `PR files fetch failed (attempt ${attempt}/${maxAttempts}): ${err}. Retrying in ${delay}ms`,
         );
+        await new Promise((r) => setTimeout(r, delay));
       }
-
-      const batch = await res.json();
-      files.push(...batch);
-
-      if (batch.length < 100) break;
-      page++;
     }
 
-    return files;
+    return [];
   }
 
-  private async fetchAndStoreFileContent(
+  /**
+   * Batched GraphQL fetch of base + head contents for all files in the PR.
+   * On complexity/size errors, batch size halves (50 → 25 → 12 → 6 → 5 floor).
+   */
+  private async fetchAndStoreBatchedContents(
     repoFullName: string,
     prNumber: number,
-    file: any,
+    files: any[],
     owner: string,
     repo: string,
     token: string,
-    headSha: string | null,
+    headSha: string,
     baseSha: string | null,
   ): Promise<void> {
-    try {
-      // Head version — fetch at the PR's head commit SHA (not file.sha which is a blob SHA).
-      // The contents API needs a commit/branch/tag ref, not a blob SHA.
-      let headContent: string | null = null;
-      if (headSha) {
-        headContent = await this.fetchFileAtRef(
+    // Only fetch contents for files that have a meaningful version to fetch
+    const scored = files.filter((f) => f.status !== "removed");
+    if (scored.length === 0) return;
+
+    let batchSize = GRAPHQL_FILES_BATCH_SIZE;
+    const minBatchSize = 5;
+
+    for (let i = 0; i < scored.length; ) {
+      const batch = scored.slice(i, i + batchSize);
+      try {
+        await this.fetchContentBatch(
+          repoFullName,
+          prNumber,
+          batch,
           owner,
           repo,
-          file.filename,
-          headSha,
           token,
+          headSha,
+          baseSha,
         );
+        i += batch.length;
+      } catch (err) {
+        if (batchSize > minBatchSize) {
+          const newSize = Math.max(Math.floor(batchSize / 2), minBatchSize);
+          this.logger.warn(
+            `GraphQL content batch failed (size=${batchSize}): ${err}. Halving to ${newSize}`,
+          );
+          batchSize = newSize;
+          // Retry same i with smaller batch
+        } else {
+          this.logger.warn(
+            `GraphQL content batch failed at min size ${minBatchSize}: ${err}. Skipping batch.`,
+          );
+          i += batch.length;
+        }
       }
+    }
+  }
 
-      // Base version — the file contents as of the PR's base commit.
-      // For renames, use the previous filename. For "added" files, no base version exists.
-      let baseContent: string | null = null;
+  private async fetchContentBatch(
+    repoFullName: string,
+    prNumber: number,
+    batch: any[],
+    owner: string,
+    repo: string,
+    token: string,
+    headSha: string,
+    baseSha: string | null,
+  ): Promise<void> {
+    const fields: string[] = [];
+    for (let i = 0; i < batch.length; i++) {
+      const file = batch[i];
+      // Base version — skip for added files or if we have no base SHA
       if (file.status !== "added" && baseSha) {
         const basePath = file.previous_filename ?? file.filename;
-        baseContent = await this.fetchFileAtRef(
-          owner,
-          repo,
-          basePath,
-          baseSha,
-          token,
+        const baseExpr = this.escapeGraphql(`${baseSha}:${basePath}`);
+        fields.push(
+          `base${i}: object(expression: "${baseExpr}") { ... on Blob { text byteSize isBinary } }`,
         );
       }
+      // Head version (already filtered out removed files at caller)
+      const headExpr = this.escapeGraphql(`${headSha}:${file.filename}`);
+      fields.push(
+        `head${i}: object(expression: "${headExpr}") { ... on Blob { text byteSize isBinary } }`,
+      );
+    }
+
+    const query = `
+      query($owner: String!, $repo: String!) {
+        repository(owner: $owner, name: $repo) {
+          ${fields.join("\n          ")}
+        }
+      }
+    `;
+
+    const res = await fetch("https://api.github.com/graphql", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query,
+        variables: { owner, repo },
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(
+        `GraphQL content fetch failed: ${res.status} ${await res.text()}`,
+      );
+    }
+
+    const body: any = await res.json();
+    if (body.errors) {
+      throw new Error(
+        `GraphQL content fetch errors: ${JSON.stringify(body.errors)}`,
+      );
+    }
+
+    const repoData = body.data?.repository ?? {};
+
+    for (let i = 0; i < batch.length; i++) {
+      const file = batch[i];
+
+      const baseBlob = repoData[`base${i}`];
+      const headBlob = repoData[`head${i}`];
+
+      const isBinary = !!headBlob?.isBinary || !!baseBlob?.isBinary;
+
+      const headContent = this.extractBlobText(headBlob);
+      const baseContent = this.extractBlobText(baseBlob);
+      const byteSize = headBlob?.byteSize ?? baseBlob?.byteSize ?? null;
 
       await this.prFileContentRepo.upsert(
         {
@@ -272,70 +404,29 @@ export class GitHubFetcherService implements OnModuleInit {
           filename: file.filename,
           baseContent,
           headContent,
-          isBinary: false,
-          byteSize: headContent ? Buffer.byteLength(headContent) : null,
+          isBinary,
+          byteSize,
         },
         ["repoFullName", "prNumber", "filename"],
       );
-    } catch (err) {
-      this.logger.warn(`Failed to fetch content for ${file.filename}: ${err}`);
     }
   }
 
-  private async fetchFileAtRef(
-    owner: string,
-    repo: string,
-    path: string,
-    sha: string | null,
-    token: string,
-  ): Promise<string | null> {
-    const ref = sha ? `?ref=${sha}` : "";
-    const res = await fetch(
-      `https://api.github.com/repos/${owner}/${repo}/contents/${encodeURIComponent(path)}${ref}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/vnd.github.raw+json",
-        },
-      },
-    );
-
-    if (res.status === 404) return null;
-    if (!res.ok) {
-      throw new Error(`Failed to fetch file: ${res.status}`);
+  private extractBlobText(blob: any): string | null {
+    if (!blob) return null;
+    if (blob.isBinary) return null;
+    if (
+      typeof blob.byteSize === "number" &&
+      blob.byteSize > MAX_FILE_SIZE_BYTES
+    ) {
+      return null;
     }
-
-    return res.text();
+    return blob.text ?? null;
   }
 
-  private isBinary(filename: string): boolean {
-    const binaryExts = [
-      ".png",
-      ".jpg",
-      ".jpeg",
-      ".gif",
-      ".ico",
-      ".svg",
-      ".woff",
-      ".woff2",
-      ".ttf",
-      ".eot",
-      ".zip",
-      ".tar",
-      ".gz",
-      ".bz2",
-      ".pdf",
-      ".exe",
-      ".dll",
-      ".so",
-      ".dylib",
-      ".bin",
-      ".dat",
-      ".db",
-      ".sqlite",
-    ];
-    const lower = filename.toLowerCase();
-    return binaryExts.some((ext) => lower.endsWith(ext));
+  private escapeGraphql(s: string): string {
+    // Escape backslashes and double-quotes for safe inline strings in GraphQL.
+    return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   }
 
   // --- Backfill ---
