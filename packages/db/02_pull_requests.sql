@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS pull_requests (
     author_login            VARCHAR(255),
     author_association      VARCHAR(20),
     title                   TEXT,
+    body                    TEXT,
     state                   VARCHAR(10)     NOT NULL,
     created_at              TIMESTAMP       NOT NULL,
     closed_at               TIMESTAMP,

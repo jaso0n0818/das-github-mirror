@@ -19,6 +19,7 @@ export class ContributorsService {
         "p.repo_full_name AS repo_full_name",
         "p.pr_number AS pr_number",
         "p.title AS title",
+        "p.body AS body",
         "p.author_github_id AS author_github_id",
         "p.author_login AS author_login",
         "p.author_association AS author_association",

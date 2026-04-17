@@ -8,6 +8,7 @@ SELECT
     p.repo_full_name,
     p.pr_number,
     p.title,
+    p.body,
     p.author_github_id,
     p.author_login,
     p.author_association,

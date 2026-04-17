@@ -20,6 +20,9 @@ export class PullRequest {
   @Column({ type: "text", nullable: true })
   title: string;
 
+  @Column({ type: "text", nullable: true })
+  body: string | null;
+
   @Column()
   state: string;
 
@@ -33,7 +36,7 @@ export class PullRequest {
   mergedAt: string;
 
   @Column({ name: "last_edited_at", type: "timestamp", nullable: true })
-  lastEditedAt: string;
+  lastEditedAt: string | null;
 
   @Column({ name: "merged_by_login", nullable: true })
   mergedByLogin: string;

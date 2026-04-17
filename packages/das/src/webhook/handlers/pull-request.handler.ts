@@ -37,7 +37,8 @@ export class PullRequestHandler {
       createdAt: pr.created_at,
       closedAt: pr.closed_at ?? null,
       mergedAt: pr.merged_at ?? null,
-      lastEditedAt: pr.updated_at ?? null,
+      // last_edited_at is populated by the fetch-pr-metadata job via GraphQL —
+      // REST's updated_at changes on any interaction, not just body edits.
       mergedByLogin: pr.merged_by?.login ?? null,
       baseRef: pr.base?.ref ?? null,
       headSha: pr.head?.sha ?? null,
@@ -54,12 +55,19 @@ export class PullRequestHandler {
       lastEventAt: new Date().toISOString(),
     });
 
-    // Enqueue closing issues fetch on relevant actions
-    const issueActions = ["opened", "synchronize", "closed", "reopened"];
-    if (issueActions.includes(action)) {
-      const jobId = `closing-${repoFullName}-${prNumber}`;
+    // Enqueue metadata fetch (closing issues + body + lastEditedAt) on relevant actions.
+    // Also run on `edited` so post-merge body edits are captured.
+    const metadataActions = [
+      "opened",
+      "synchronize",
+      "closed",
+      "reopened",
+      "edited",
+    ];
+    if (metadataActions.includes(action)) {
+      const jobId = `meta-${repoFullName}-${prNumber}`;
       await this.fetchQueue.add(
-        FETCH_JOBS.CLOSING_ISSUES,
+        FETCH_JOBS.PR_METADATA,
         { repoFullName, prNumber },
         {
           jobId,

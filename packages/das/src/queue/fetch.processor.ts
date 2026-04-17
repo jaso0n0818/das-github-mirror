@@ -7,7 +7,7 @@ import { Issue, PullRequest } from "../entities";
 import { GitHubFetcherService } from "../webhook/github-fetcher.service";
 import { FETCH_QUEUE, FETCH_JOBS, DEFAULT_BACKFILL_DAYS } from "./constants";
 
-export interface ClosingIssuesJobData {
+export interface PrMetadataJobData {
   repoFullName: string;
   prNumber: number;
 }
@@ -22,7 +22,7 @@ export interface BackfillRepoJobData {
   days?: number;
 }
 
-type JobData = ClosingIssuesJobData | PrFilesJobData | BackfillRepoJobData;
+type JobData = PrMetadataJobData | PrFilesJobData | BackfillRepoJobData;
 
 @Processor(FETCH_QUEUE, { concurrency: 5 })
 export class FetchProcessor extends WorkerHost {
@@ -42,9 +42,9 @@ export class FetchProcessor extends WorkerHost {
 
   async process(job: Job<JobData>): Promise<void> {
     switch (job.name) {
-      case FETCH_JOBS.CLOSING_ISSUES: {
-        const { repoFullName, prNumber } = job.data as ClosingIssuesJobData;
-        await this.handleClosingIssues(repoFullName, prNumber);
+      case FETCH_JOBS.PR_METADATA: {
+        const { repoFullName, prNumber } = job.data as PrMetadataJobData;
+        await this.handlePrMetadata(repoFullName, prNumber);
         break;
       }
       case FETCH_JOBS.PR_FILES: {
@@ -62,28 +62,28 @@ export class FetchProcessor extends WorkerHost {
     }
   }
 
-  private async handleClosingIssues(
+  private async handlePrMetadata(
     repoFullName: string,
     prNumber: number,
   ): Promise<void> {
-    this.logger.log(
-      `Fetching closingIssuesReferences for ${repoFullName}#${prNumber}`,
-    );
+    this.logger.log(`Fetching PR metadata for ${repoFullName}#${prNumber}`);
 
-    const issueNumbers = await this.fetcher.fetchClosingIssueNumbers(
-      repoFullName,
-      prNumber,
-    );
+    const { closingIssueNumbers, body, lastEditedAt } =
+      await this.fetcher.fetchPrMetadata(repoFullName, prNumber);
 
     await this.prRepo.update(
       { repoFullName, prNumber },
-      { closingIssueNumbers: issueNumbers },
+      {
+        closingIssueNumbers,
+        body,
+        lastEditedAt,
+      },
     );
 
     // If this PR is merged, mark each linked issue as solved_by_pr
     const pr = await this.prRepo.findOneBy({ repoFullName, prNumber });
-    if (pr?.state === "MERGED" && issueNumbers.length > 0) {
-      for (const issueNumber of issueNumbers) {
+    if (pr?.state === "MERGED" && closingIssueNumbers.length > 0) {
+      for (const issueNumber of closingIssueNumbers) {
         await this.issueRepo.update(
           { repoFullName, issueNumber },
           { solvedByPr: prNumber },
@@ -121,13 +121,13 @@ export class FetchProcessor extends WorkerHost {
     );
     this.logger.log(`Backfilled ${prs.length} PRs from ${repoFullName}`);
 
-    // Enqueue follow-up jobs (closing issues for all, files for merged)
+    // Enqueue follow-up jobs (metadata for all, files for merged)
     for (const { prNumber, isMerged } of prs) {
       await this.fetchQueue.add(
-        FETCH_JOBS.CLOSING_ISSUES,
+        FETCH_JOBS.PR_METADATA,
         { repoFullName, prNumber },
         {
-          jobId: `closing-${repoFullName}-${prNumber}`,
+          jobId: `meta-${repoFullName}-${prNumber}`,
           removeOnComplete: true,
           removeOnFail: 50,
           attempts: 3,

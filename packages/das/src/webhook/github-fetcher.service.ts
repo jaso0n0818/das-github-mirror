@@ -155,12 +155,22 @@ export class GitHubFetcherService implements OnModuleInit {
     return null;
   }
 
-  // --- GraphQL: closingIssuesReferences ---
+  // --- GraphQL: PR metadata (closing issues + body + last edit) ---
 
-  async fetchClosingIssueNumbers(
+  /**
+   * Fetch PR fields that require GraphQL — closing issue references,
+   * body text, and the lastEditedAt timestamp (which is specific to body
+   * edits, unlike REST's updated_at which changes on any interaction).
+   * Combined into one query to save a round trip.
+   */
+  async fetchPrMetadata(
     repoFullName: string,
     prNumber: number,
-  ): Promise<number[]> {
+  ): Promise<{
+    closingIssueNumbers: number[];
+    body: string | null;
+    lastEditedAt: string | null;
+  }> {
     const [owner, repo] = repoFullName.split("/");
     const token = await this.getTokenForRepo(repoFullName);
 
@@ -168,6 +178,8 @@ export class GitHubFetcherService implements OnModuleInit {
       query($owner: String!, $repo: String!, $pr: Int!) {
         repository(owner: $owner, name: $repo) {
           pullRequest(number: $pr) {
+            bodyText
+            lastEditedAt
             closingIssuesReferences(first: 10) {
               nodes { number }
             }
@@ -190,15 +202,19 @@ export class GitHubFetcherService implements OnModuleInit {
 
     if (!res.ok) {
       throw new Error(
-        `GraphQL request failed: ${res.status} ${await res.text()}`,
+        `GraphQL PR metadata fetch failed: ${res.status} ${await res.text()}`,
       );
     }
 
-    const body = await res.json();
-    const nodes =
-      body.data?.repository?.pullRequest?.closingIssuesReferences?.nodes ?? [];
+    const body: any = await res.json();
+    const pr = body.data?.repository?.pullRequest ?? {};
+    const nodes = pr.closingIssuesReferences?.nodes ?? [];
 
-    return nodes.map((n: { number: number }) => n.number);
+    return {
+      closingIssueNumbers: nodes.map((n: { number: number }) => n.number),
+      body: pr.bodyText ?? null,
+      lastEditedAt: pr.lastEditedAt ?? null,
+    };
   }
 
   // --- PR files + contents (REST for list, batched GraphQL for contents) ---
@@ -531,11 +547,12 @@ export class GitHubFetcherService implements OnModuleInit {
             nodes {
               number
               title
+              bodyText
               state
               createdAt
               closedAt
               mergedAt
-              updatedAt
+              lastEditedAt
               merged
               author {
                 login
@@ -599,11 +616,12 @@ export class GitHubFetcherService implements OnModuleInit {
             authorLogin: pr.author?.login ?? null,
             authorAssociation: pr.authorAssociation ?? null,
             title: pr.title,
+            body: pr.bodyText ?? null,
             state: pr.state, // OPEN / CLOSED / MERGED
             createdAt: pr.createdAt,
             closedAt: pr.closedAt ?? null,
             mergedAt: pr.mergedAt ?? null,
-            lastEditedAt: pr.updatedAt ?? null,
+            lastEditedAt: pr.lastEditedAt ?? null,
             mergedByLogin: pr.mergedBy?.login ?? null,
             baseRef: pr.baseRef?.name ?? null,
             headSha: pr.headRefOid ?? null,
