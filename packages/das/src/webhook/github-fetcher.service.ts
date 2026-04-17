@@ -26,6 +26,9 @@ const MAX_FILE_SIZE_BYTES = 1_000_000;
 // Starting batch size for batched GraphQL file-content requests. Halves on failure.
 const GRAPHQL_FILES_BATCH_SIZE = 50;
 
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 @Injectable()
 export class GitHubFetcherService implements OnModuleInit {
   private readonly logger = new Logger(GitHubFetcherService.name);
@@ -58,6 +61,90 @@ export class GitHubFetcherService implements OnModuleInit {
     this.privateKey = readFileSync(keyPath, "utf8");
   }
 
+  // --- Rate-limit-aware fetch ---
+
+  /**
+   * Wraps fetch() with GitHub rate-limit handling:
+   * - Parses X-RateLimit-Remaining on every response; warns below 500.
+   * - On 403/429 with remaining=0 or Retry-After header, waits until the
+   *   rate limit resets and retries.
+   * - On 5xx / network errors, retries with exponential backoff (max 3).
+   */
+  private async githubFetch(
+    url: string,
+    init: RequestInit = {},
+  ): Promise<Response> {
+    const maxAttempts = 3;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      let res: Response;
+      try {
+        res = await fetch(url, init);
+      } catch (err) {
+        if (attempt < maxAttempts) {
+          const delay = Math.min(2000 * 2 ** (attempt - 1), 30_000);
+          this.logger.warn(
+            `Network error calling ${url}: ${err} (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms`,
+          );
+          await sleep(delay);
+          continue;
+        }
+        throw err;
+      }
+
+      const remainingStr = res.headers.get("x-ratelimit-remaining");
+      const remaining = remainingStr ? Number(remainingStr) : NaN;
+      if (!isNaN(remaining) && remaining > 0 && remaining < 500) {
+        this.logger.warn(`GitHub rate limit low: ${remaining} calls remaining`);
+      }
+
+      // Rate-limit exhausted → wait for reset and retry
+      if (
+        (res.status === 403 || res.status === 429) &&
+        (remaining === 0 || res.headers.has("retry-after"))
+      ) {
+        const waitMs = this.computeRetryAfterMs(res);
+        this.logger.warn(
+          `Rate limit hit on ${url}: waiting ${Math.round(waitMs / 1000)}s before retry`,
+        );
+        await sleep(waitMs);
+        continue;
+      }
+
+      // Server-side transient error — retry with backoff
+      if (res.status >= 500 && res.status < 600 && attempt < maxAttempts) {
+        const delay = Math.min(2000 * 2 ** (attempt - 1), 30_000);
+        this.logger.warn(
+          `GitHub ${res.status} on ${url} (attempt ${attempt}/${maxAttempts}), retrying in ${delay}ms`,
+        );
+        await sleep(delay);
+        continue;
+      }
+
+      return res;
+    }
+
+    throw new Error(`githubFetch exhausted retries for ${url}`);
+  }
+
+  private computeRetryAfterMs(res: Response): number {
+    const retryAfter = res.headers.get("retry-after");
+    if (retryAfter) {
+      const seconds = Number(retryAfter);
+      if (!isNaN(seconds)) return (seconds + 1) * 1000;
+      const dateMs = Date.parse(retryAfter);
+      if (!isNaN(dateMs)) return Math.max(0, dateMs - Date.now()) + 1000;
+    }
+
+    const reset = res.headers.get("x-ratelimit-reset");
+    if (reset) {
+      const resetMs = Number(reset) * 1000;
+      if (!isNaN(resetMs)) return Math.max(0, resetMs - Date.now()) + 1000;
+    }
+
+    return 60_000;
+  }
+
   // --- Authentication ---
 
   private createAppJwt(): string {
@@ -76,7 +163,7 @@ export class GitHubFetcherService implements OnModuleInit {
     }
 
     const jwt = this.createAppJwt();
-    const res = await fetch(
+    const res = await this.githubFetch(
       `https://api.github.com/app/installations/${installationId}/access_tokens`,
       {
         method: "POST",
@@ -128,7 +215,7 @@ export class GitHubFetcherService implements OnModuleInit {
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        const res = await fetch(
+        const res = await this.githubFetch(
           `https://api.github.com/repos/${repoFullName}/compare/${baseSha}...${headSha}`,
           {
             headers: {
@@ -200,7 +287,7 @@ export class GitHubFetcherService implements OnModuleInit {
       }
     `;
 
-    const res = await fetch("https://api.github.com/graphql", {
+    const res = await this.githubFetch("https://api.github.com/graphql", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -329,7 +416,7 @@ export class GitHubFetcherService implements OnModuleInit {
         let page = 1;
 
         while (true) {
-          const res = await fetch(
+          const res = await this.githubFetch(
             `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/files?per_page=${perPage}&page=${page}`,
             {
               headers: {
@@ -462,7 +549,7 @@ export class GitHubFetcherService implements OnModuleInit {
       }
     `;
 
-    const res = await fetch("https://api.github.com/graphql", {
+    const res = await this.githubFetch("https://api.github.com/graphql", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -626,17 +713,20 @@ export class GitHubFetcherService implements OnModuleInit {
     let cursor: string | null = null;
 
     while (true) {
-      const res: Response = await fetch("https://api.github.com/graphql", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
+      const res: Response = await this.githubFetch(
+        "https://api.github.com/graphql",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            query,
+            variables: { owner, repo, cursor },
+          }),
         },
-        body: JSON.stringify({
-          query,
-          variables: { owner, repo, cursor },
-        }),
-      });
+      );
 
       if (!res.ok) {
         throw new Error(
@@ -785,17 +875,20 @@ export class GitHubFetcherService implements OnModuleInit {
     let cursor: string | null = null;
 
     while (true) {
-      const res: Response = await fetch("https://api.github.com/graphql", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
+      const res: Response = await this.githubFetch(
+        "https://api.github.com/graphql",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            query,
+            variables: { owner, repo, cursor },
+          }),
         },
-        body: JSON.stringify({
-          query,
-          variables: { owner, repo, cursor },
-        }),
-      });
+      );
 
       if (!res.ok) {
         throw new Error(
