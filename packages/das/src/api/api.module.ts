@@ -16,6 +16,7 @@ import { ApiKeyGuard } from "./api-key.guard";
 import { RequireApiKeyGuard } from "./require-api-key.guard";
 import { ContributorsController } from "./contributors.controller";
 import { ContributorsService } from "./contributors.service";
+import { HealthController } from "./health.controller";
 
 @Module({
   imports: [
@@ -38,7 +39,7 @@ import { ContributorsService } from "./contributors.service";
       },
     ]),
   ],
-  controllers: [ContributorsController, AdminController],
+  controllers: [ContributorsController, AdminController, HealthController],
   providers: [ContributorsService, ApiKeyGuard, RequireApiKeyGuard],
 })
 export class ApiModule {}
