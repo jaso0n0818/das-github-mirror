@@ -1,6 +1,11 @@
 import { CacheInterceptor } from "@nestjs/cache-manager";
-import { ExecutionContext, Injectable } from "@nestjs/common";
-import { NO_CACHE_KEY } from "./no-cache.decorator";
+import { ExecutionContext, Injectable, SetMetadata } from "@nestjs/common";
+
+export const NO_CACHE_KEY = "no-cache";
+
+/** Opt-out decorator: mark a GET handler as uncacheable. */
+export const NoCache = (): MethodDecorator & ClassDecorator =>
+  SetMetadata(NO_CACHE_KEY, true);
 
 @Injectable()
 export class CustomCacheInterceptor extends CacheInterceptor {
