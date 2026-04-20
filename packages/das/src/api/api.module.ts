@@ -17,6 +17,8 @@ import { RequireApiKeyGuard } from "./require-api-key.guard";
 import { HealthController } from "./health.controller";
 import { MinersController } from "./miners/miners.controller";
 import { MinersService } from "./miners/miners.service";
+import { PullsController } from "./pulls/pulls.controller";
+import { PullsService } from "./pulls/pulls.service";
 
 @Module({
   imports: [
@@ -39,7 +41,12 @@ import { MinersService } from "./miners/miners.service";
       },
     ]),
   ],
-  controllers: [MinersController, AdminController, HealthController],
-  providers: [MinersService, ApiKeyGuard, RequireApiKeyGuard],
+  controllers: [
+    MinersController,
+    PullsController,
+    AdminController,
+    HealthController,
+  ],
+  providers: [MinersService, PullsService, ApiKeyGuard, RequireApiKeyGuard],
 })
 export class ApiModule {}
