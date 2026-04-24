@@ -104,7 +104,11 @@ export class MinersService {
       LEFT JOIN repos r
         ON r.repo_full_name = p.repo_full_name
       WHERE p.author_github_id = $1
-        AND p.created_at       >= $2
+        AND (
+          (p.state = 'OPEN'   AND p.created_at >= $2)
+          OR (p.state = 'MERGED' AND p.merged_at >= $2)
+          OR (p.state = 'CLOSED' AND p.created_at >= $2)
+        )
       ORDER BY p.created_at DESC
       `,
       [githubId, since],
