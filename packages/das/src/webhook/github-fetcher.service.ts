@@ -627,13 +627,13 @@ export class GitHubFetcherService implements OnModuleInit {
 
   /**
    * Page through GraphQL for PRs in a repo created within the last N days.
-   * Upserts each PR. Returns the list of merged PR numbers so the caller can
+   * Upserts each PR. Returns the list of PR numbers so the caller can
    * enqueue follow-up fetch jobs for diffs + closing issues.
    */
   async backfillPullRequests(
     repoFullName: string,
     sinceDate: Date,
-  ): Promise<{ prNumber: number; isMerged: boolean }[]> {
+  ): Promise<{ prNumber: number }[]> {
     const [owner, repo] = repoFullName.split("/");
     const token = await this.getTokenForRepo(repoFullName);
 
@@ -715,7 +715,7 @@ export class GitHubFetcherService implements OnModuleInit {
       }
     `;
 
-    const prs: { prNumber: number; isMerged: boolean }[] = [];
+    const prs: { prNumber: number }[] = [];
     let cursor: string | null = null;
     let defaultBranchWritten = false;
 
@@ -820,7 +820,7 @@ export class GitHubFetcherService implements OnModuleInit {
           pr.timelineItems?.nodes ?? [],
         );
 
-        prs.push({ prNumber: pr.number, isMerged: !!pr.merged });
+        prs.push({ prNumber: pr.number });
       }
 
       if (shouldStop || !page.pageInfo.hasNextPage) break;

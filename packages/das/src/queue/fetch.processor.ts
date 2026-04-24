@@ -121,8 +121,8 @@ export class FetchProcessor extends WorkerHost {
     );
     this.logger.log(`Backfilled ${prs.length} PRs from ${repoFullName}`);
 
-    // Enqueue follow-up jobs (metadata for all, files for merged)
-    for (const { prNumber, isMerged } of prs) {
+    // Enqueue follow-up jobs (metadata + files for every PR).
+    for (const { prNumber } of prs) {
       await this.fetchQueue.add(
         FETCH_JOBS.PR_METADATA,
         { repoFullName, prNumber },
@@ -135,19 +135,17 @@ export class FetchProcessor extends WorkerHost {
         },
       );
 
-      if (isMerged) {
-        await this.fetchQueue.add(
-          FETCH_JOBS.PR_FILES,
-          { repoFullName, prNumber },
-          {
-            jobId: `files-${repoFullName}-${prNumber}`,
-            removeOnComplete: true,
-            removeOnFail: 50,
-            attempts: 3,
-            backoff: { type: "exponential", delay: 5000 },
-          },
-        );
-      }
+      await this.fetchQueue.add(
+        FETCH_JOBS.PR_FILES,
+        { repoFullName, prNumber },
+        {
+          jobId: `files-${repoFullName}-${prNumber}`,
+          removeOnComplete: true,
+          removeOnFail: 50,
+          attempts: 3,
+          backoff: { type: "exponential", delay: 5000 },
+        },
+      );
     }
 
     // Fetch and upsert issues
