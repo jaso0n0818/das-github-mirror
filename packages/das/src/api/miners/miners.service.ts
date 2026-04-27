@@ -201,7 +201,10 @@ export class MinersService {
         ) AS solving_pr
       FROM issues i
       WHERE i.author_github_id = $1
-        AND i.created_at       >= $2
+        AND (
+          (i.state = 'OPEN'   AND i.created_at >= $2)
+          OR (i.state = 'CLOSED' AND i.closed_at >= $2)
+        )
       ORDER BY i.created_at DESC
       `,
       [githubId, since],
