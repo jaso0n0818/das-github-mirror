@@ -338,8 +338,11 @@ export class GitHubFetcherService implements OnModuleInit {
     }
 
     // Fetch and store the merge-base SHA. Needed for correct tree-diff
-    // scoring — differs from baseSha when base branch has advanced.
-    if (pr.baseSha && pr.headSha && !pr.mergeBaseSha) {
+    // scoring — differs from baseSha when base branch has advanced. Recompute
+    // on every fetch: a stored value can go stale when head advances via
+    // synchronize, leaving base_content pinned to an old ancestor and
+    // inflating the scored diff with churn from unrelated PRs.
+    if (pr.baseSha && pr.headSha) {
       const mergeBaseSha = await this.fetchMergeBaseSha(
         repoFullName,
         pr.baseSha,
