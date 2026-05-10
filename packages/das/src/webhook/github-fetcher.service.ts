@@ -931,26 +931,29 @@ export class GitHubFetcherService implements OnModuleInit {
           break;
         }
 
-        await this.issueRepo.upsert(
-          {
-            repoFullName,
-            issueNumber: issue.number,
-            authorGithubId: String(issue.author?.databaseId ?? ""),
-            authorLogin: issue.author?.login ?? null,
-            authorAssociation: issue.authorAssociation ?? null,
-            title: issue.title,
-            state: issue.state, // OPEN / CLOSED
-            stateReason: issue.stateReason ?? null,
-            createdAt: issue.createdAt,
-            closedAt: issue.closedAt ?? null,
-            updatedAt: issue.updatedAt ?? null,
-            lastEditedAt: issue.lastEditedAt ?? null,
-            labels: (issue.labels?.nodes ?? []).map(
-              (l: { name: string }) => l.name,
-            ),
-          },
-          ["repoFullName", "issueNumber"],
-        );
+        const issueData: Partial<Issue> = {
+          repoFullName,
+          issueNumber: issue.number,
+          authorGithubId: String(issue.author?.databaseId ?? ""),
+          authorLogin: issue.author?.login ?? null,
+          authorAssociation: issue.authorAssociation ?? null,
+          title: issue.title,
+          state: issue.state, // OPEN / CLOSED
+          stateReason: issue.stateReason ?? null,
+          createdAt: issue.createdAt,
+          closedAt: issue.closedAt ?? null,
+          updatedAt: issue.updatedAt ?? null,
+          lastEditedAt: issue.lastEditedAt ?? null,
+          labels: (issue.labels?.nodes ?? []).map(
+            (l: { name: string }) => l.name,
+          ),
+        };
+
+        if (issue.state === "OPEN") {
+          issueData.solvedByPr = null;
+        }
+
+        await this.issueRepo.upsert(issueData, ["repoFullName", "issueNumber"]);
 
         // Upsert label events for this issue
         await this.saveLabelTimelineEvents(

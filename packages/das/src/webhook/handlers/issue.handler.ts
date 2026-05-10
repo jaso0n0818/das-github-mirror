@@ -20,6 +20,7 @@ export class IssueHandler {
     // Skip pull request events delivered as issue events
     if (issue.pull_request) return;
 
+    const issueState = issue.state.toUpperCase();
     const data: Partial<Issue> = {
       repoFullName,
       issueNumber: issue.number,
@@ -27,13 +28,17 @@ export class IssueHandler {
       authorLogin: issue.user.login,
       authorAssociation: issue.author_association,
       title: issue.title ?? null,
-      state: issue.state.toUpperCase(),
+      state: issueState,
       stateReason: issue.state_reason?.toUpperCase() ?? null,
       createdAt: issue.created_at,
       closedAt: issue.closed_at ?? null,
       updatedAt: issue.updated_at ?? null,
       labels: (issue.labels ?? []).map((l: any) => l.name),
     };
+
+    if (issueState === "OPEN") {
+      data.solvedByPr = null;
+    }
 
     // The `edited` action fires specifically for body or title changes.
     // Use the webhook's updated_at as the precise edit timestamp — for
