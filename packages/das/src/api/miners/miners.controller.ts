@@ -37,21 +37,25 @@ export class MinersController {
   @ApiOperation({
     summary: "Issues authored by a miner",
     description:
-      "Returns every issue the miner has authored since the given date, " +
-      "including current labels with actor attribution and the PR number " +
-      "(if any) that solved the issue.",
+      "Returns issues the miner has authored, with current labels (actor " +
+      "attribution) and any solving PR. When `since` is provided, returns " +
+      "OPEN issues created on/after that date plus CLOSED issues closed " +
+      "on/after that date (scoring window). When `since` is omitted, " +
+      "returns all currently-OPEN issues with no time bound and no CLOSED " +
+      "history (open-issue load counting).",
   })
   @ApiParam({ name: "githubId", description: "GitHub user ID (numeric)" })
   @ApiQuery({
     name: "since",
     required: false,
     description:
-      "ISO timestamp. Defaults to 35 days ago (midnight UTC) if omitted.",
+      "ISO timestamp. When omitted, the response contains all currently-" +
+      "OPEN issues with no time bound and no CLOSED history.",
   })
   async getIssues(
     @Param("githubId") githubId: string,
     @Query("since") since?: string,
   ): Promise<unknown> {
-    return this.miners.getIssues(githubId, MinersService.resolveSince(since));
+    return this.miners.getIssues(githubId, since ?? null);
   }
 }
