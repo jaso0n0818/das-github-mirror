@@ -124,10 +124,10 @@ export class MinersService {
 
   async getIssues(
     githubId: string,
-    since: string,
+    since: string | null,
   ): Promise<{
     github_id: string;
-    since: string;
+    since: string | null;
     generated_at: string;
     issues: unknown[];
   }> {
@@ -208,7 +208,7 @@ export class MinersService {
       FROM issues i
       WHERE i.author_github_id = $1
         AND (
-          (i.state = 'OPEN'   AND i.created_at >= $2)
+          (i.state = 'OPEN' AND ($2::timestamptz IS NULL OR i.created_at >= $2))
           OR (i.state = 'CLOSED' AND i.closed_at >= $2)
         )
       ORDER BY i.created_at DESC
