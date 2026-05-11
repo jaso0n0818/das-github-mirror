@@ -5,7 +5,7 @@ import { InjectQueue } from "@nestjs/bullmq";
 import { Repository } from "typeorm";
 import { Queue } from "bullmq";
 import { PullRequest, Repo } from "../../entities";
-import { FETCH_QUEUE, FETCH_JOBS } from "../../queue/constants";
+import { FETCH_QUEUE, FETCH_JOBS, prFilesJobId } from "../../queue/constants";
 
 @Injectable()
 export class PullRequestHandler {
@@ -96,10 +96,17 @@ export class PullRequestHandler {
         );
       }
 
-      const jobId = `files-${repoFullName}-${prNumber}`;
+      const expectedHeadSha = data.headSha ?? null;
+      const expectedBaseSha = data.baseSha ?? null;
+      const jobId = prFilesJobId(
+        repoFullName,
+        prNumber,
+        expectedHeadSha,
+        expectedBaseSha,
+      );
       await this.fetchQueue.add(
         FETCH_JOBS.PR_FILES,
-        { repoFullName, prNumber },
+        { repoFullName, prNumber, expectedHeadSha, expectedBaseSha },
         {
           jobId,
           removeOnComplete: true,

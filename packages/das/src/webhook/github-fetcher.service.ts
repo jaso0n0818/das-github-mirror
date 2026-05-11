@@ -636,7 +636,9 @@ export class GitHubFetcherService implements OnModuleInit {
   async backfillPullRequests(
     repoFullName: string,
     sinceDate: Date,
-  ): Promise<{ prNumber: number }[]> {
+  ): Promise<
+    { prNumber: number; headSha: string | null; baseSha: string | null }[]
+  > {
     const [owner, repo] = repoFullName.split("/");
     const token = await this.getTokenForRepo(repoFullName);
 
@@ -718,7 +720,11 @@ export class GitHubFetcherService implements OnModuleInit {
       }
     `;
 
-    const prs: { prNumber: number }[] = [];
+    const prs: {
+      prNumber: number;
+      headSha: string | null;
+      baseSha: string | null;
+    }[] = [];
     let cursor: string | null = null;
     let defaultBranchWritten = false;
 
@@ -823,7 +829,11 @@ export class GitHubFetcherService implements OnModuleInit {
           pr.timelineItems?.nodes ?? [],
         );
 
-        prs.push({ prNumber: pr.number });
+        prs.push({
+          prNumber: pr.number,
+          headSha: pr.headRefOid ?? null,
+          baseSha: pr.baseRefOid ?? null,
+        });
       }
 
       if (shouldStop || !page.pageInfo.hasNextPage) break;

@@ -7,3 +7,14 @@ export const FETCH_JOBS = {
 } as const;
 
 export const DEFAULT_BACKFILL_DAYS = 40;
+
+export function prFilesJobId(
+  repoFullName: string,
+  prNumber: number,
+  headSha: string | null,
+  baseSha: string | null,
+): string {
+  return `files-${repoFullName}-${prNumber}-${headSha ?? "no-head"}-${
+    baseSha ?? "no-base"
+  }`;
+}
