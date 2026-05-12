@@ -34,8 +34,8 @@ export class LabelHandler {
       source === "pr" ? payload.pull_request.number : payload.issue.number;
 
     // Append to label_events log. Actor's repo role is resolved at read time
-    // via contributor_repo_roles (see pr_labels_by_actor view) — neither the
-    // webhook sender nor GraphQL LabeledEvent.actor expose author_association.
+    // via contributor_repo_roles using stored PR/issue, review, and comment
+    // association evidence; label actors themselves don't expose it.
     await this.labelEventRepo.save({
       repoFullName,
       targetNumber,

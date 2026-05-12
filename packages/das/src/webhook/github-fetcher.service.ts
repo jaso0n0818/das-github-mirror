@@ -982,8 +982,8 @@ export class GitHubFetcherService implements OnModuleInit {
   /**
    * Upsert a list of LABELED_EVENT / UNLABELED_EVENT timeline nodes into
    * the label_events table. Actor role is resolved at read time via
-   * contributor_repo_roles — GraphQL's actor type doesn't expose
-   * authorAssociation.
+   * contributor_repo_roles using stored PR/issue, review, and comment
+   * association evidence; GraphQL's actor type doesn't expose authorAssociation.
    */
   private async saveLabelTimelineEvents(
     repoFullName: string,

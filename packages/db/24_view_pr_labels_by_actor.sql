@@ -2,8 +2,8 @@
 -- Collapses label_events to the latest action per (repo, pr, label); only rows
 -- where the latest action was "labeled" are included (i.e. label still applied).
 -- actor_association is resolved from contributor_repo_roles (the actor's most
--- recently observed role from PRs/issues they've authored in this repo).
--- Actors who've never authored anything return NULL for actor_association.
+-- recently observed role from authored PRs/issues, reviews, or comments in
+-- this repo). Actors with no stored association evidence return NULL.
 
 CREATE OR REPLACE VIEW pr_labels_by_actor AS
 WITH latest_events AS (
