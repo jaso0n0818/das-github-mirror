@@ -987,8 +987,10 @@ export class GitHubFetcherService implements OnModuleInit {
   }
 
   /**
-   * Upsert a list of LABELED_EVENT / UNLABELED_EVENT timeline nodes into
-   * the label_events table. Actor role is resolved at read time via
+   * Insert LABELED_EVENT / UNLABELED_EVENT timeline nodes into label_events.
+   * Idempotent: relies on the uq_label_events_natural_key UNIQUE index so
+   * re-running backfill (or BullMQ retries) collapses to a no-op for events
+   * already written. Actor role is resolved at read time via
    * contributor_repo_roles using stored PR/issue, review, and comment
    * association evidence; GraphQL's actor type doesn't expose authorAssociation.
    */
@@ -998,23 +1000,28 @@ export class GitHubFetcherService implements OnModuleInit {
     targetType: "pr" | "issue",
     nodes: any[],
   ): Promise<void> {
-    for (const node of nodes) {
-      if (!node || !node.label?.name || !node.createdAt) continue;
-      const action =
-        node.__typename === "LabeledEvent" ? "labeled" : "unlabeled";
-
-      await this.labelEventRepo.save({
+    const rows = nodes
+      .filter((node) => node && node.label?.name && node.createdAt)
+      .map((node) => ({
         repoFullName,
         targetNumber,
         targetType,
         labelName: node.label.name,
-        action,
+        action: node.__typename === "LabeledEvent" ? "labeled" : "unlabeled",
         actorGithubId: node.actor?.databaseId
           ? String(node.actor.databaseId)
           : null,
         actorLogin: node.actor?.login ?? null,
         timestamp: node.createdAt,
-      });
-    }
+      }));
+
+    if (rows.length === 0) return;
+
+    await this.labelEventRepo
+      .createQueryBuilder()
+      .insert()
+      .values(rows)
+      .orIgnore()
+      .execute();
   }
 }

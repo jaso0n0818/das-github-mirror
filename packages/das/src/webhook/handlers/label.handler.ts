@@ -34,18 +34,27 @@ export class LabelHandler {
       source === "pr" ? payload.pull_request.number : payload.issue.number;
 
     // Append to label_events log. Actor's repo role is resolved at read time
-    // via contributor_repo_roles using stored PR/issue, review, and comment
-    // association evidence; label actors themselves don't expose it.
-    await this.labelEventRepo.save({
-      repoFullName,
-      targetNumber,
-      targetType: source,
-      labelName: label.name,
-      action,
-      actorGithubId: sender ? String(sender.id) : null,
-      actorLogin: sender?.login ?? null,
-      timestamp: new Date().toISOString(),
-    });
+    // via contributor_repo_roles (see pr_labels_by_actor view) using stored
+    // PR/issue, review, and comment association evidence — neither the webhook
+    // sender nor GraphQL LabeledEvent.actor expose author_association.
+    // orIgnore() makes the insert idempotent under the uq_label_events_natural_key
+    // constraint; same-delivery retries are already gated upstream by
+    // webhook_deliveries, this is defense-in-depth.
+    await this.labelEventRepo
+      .createQueryBuilder()
+      .insert()
+      .values({
+        repoFullName,
+        targetNumber,
+        targetType: source,
+        labelName: label.name,
+        action,
+        actorGithubId: sender ? String(sender.id) : null,
+        actorLogin: sender?.login ?? null,
+        timestamp: new Date().toISOString(),
+      })
+      .orIgnore()
+      .execute();
 
     // Update current labels snapshot on the parent row
     const currentLabels: string[] =

@@ -16,3 +16,8 @@ CREATE TABLE IF NOT EXISTS label_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_label_events_target ON label_events(repo_full_name, target_number, timestamp);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_label_events_natural_key
+    ON label_events (repo_full_name, target_number, target_type,
+                     label_name, action, timestamp)
+    NULLS NOT DISTINCT;
