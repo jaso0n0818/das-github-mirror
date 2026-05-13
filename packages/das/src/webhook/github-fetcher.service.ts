@@ -884,11 +884,14 @@ export class GitHubFetcherService implements OnModuleInit {
               authorAssociation
               labels(first: 10) { nodes { name } }
               timelineItems(
-                itemTypes: [LABELED_EVENT, UNLABELED_EVENT]
+                itemTypes: [LABELED_EVENT, UNLABELED_EVENT, TRANSFERRED_EVENT]
                 first: 30
               ) {
                 nodes {
                   __typename
+                  ... on TransferredEvent {
+                    createdAt
+                  }
                   ... on LabeledEvent {
                     createdAt
                     label { name }
@@ -965,6 +968,15 @@ export class GitHubFetcherService implements OnModuleInit {
             (l: { name: string }) => l.name,
           ),
         };
+
+        if (
+          (issue.timelineItems?.nodes ?? []).some(
+            (node: { __typename?: string }) =>
+              node.__typename === "TransferredEvent",
+          )
+        ) {
+          issueData.isTransferred = true;
+        }
 
         if (issue.state === "OPEN") {
           issueData.solvedByPr = null;

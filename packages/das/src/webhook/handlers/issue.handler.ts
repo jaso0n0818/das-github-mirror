@@ -40,6 +40,10 @@ export class IssueHandler {
       data.solvedByPr = null;
     }
 
+    if (payload.action === "transferred") {
+      data.isTransferred = true;
+    }
+
     // The `edited` action fires specifically for body or title changes.
     // Use the webhook's updated_at as the precise edit timestamp — for
     // other actions (labeled, closed, commented, etc.) don't touch
