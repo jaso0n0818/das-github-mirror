@@ -13,6 +13,8 @@ import { FETCH_QUEUE } from "../queue/constants";
 import { AdminController } from "./admin.controller";
 import { RequireApiKeyGuard } from "./require-api-key.guard";
 import { HealthController } from "./health.controller";
+import { DashboardController } from "./dashboard/dashboard.controller";
+import { DashboardService } from "./dashboard/dashboard.service";
 import { MinersController } from "./miners/miners.controller";
 import { MinersService } from "./miners/miners.service";
 import { PullsController } from "./pulls/pulls.controller";
@@ -31,11 +33,17 @@ import { PullsService } from "./pulls/pulls.service";
     BullModule.registerQueue({ name: FETCH_QUEUE }),
   ],
   controllers: [
+    DashboardController,
     MinersController,
     PullsController,
     AdminController,
     HealthController,
   ],
-  providers: [MinersService, PullsService, RequireApiKeyGuard],
+  providers: [
+    DashboardService,
+    MinersService,
+    PullsService,
+    RequireApiKeyGuard,
+  ],
 })
 export class ApiModule {}
