@@ -2,13 +2,15 @@
 import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
-import { ReviewComment } from "../../entities";
+import { Repo, ReviewComment } from "../../entities";
 
 @Injectable()
 export class ReviewCommentHandler {
   constructor(
     @InjectRepository(ReviewComment)
     private readonly reviewCommentRepo: Repository<ReviewComment>,
+    @InjectRepository(Repo)
+    private readonly repoRepo: Repository<Repo>,
   ) {}
 
   async handle(payload: Record<string, any>): Promise<void> {
@@ -19,6 +21,9 @@ export class ReviewCommentHandler {
       await this.reviewCommentRepo.delete({
         repoFullName,
         commentId: String(comment.id),
+      });
+      await this.repoRepo.update(repoFullName, {
+        lastEventAt: new Date().toISOString(),
       });
       return;
     }
@@ -41,5 +46,9 @@ export class ReviewCommentHandler {
     };
 
     await this.reviewCommentRepo.upsert(data, ["repoFullName", "commentId"]);
+
+    await this.repoRepo.update(repoFullName, {
+      lastEventAt: new Date().toISOString(),
+    });
   }
 }
