@@ -4,22 +4,10 @@ import { DataSource } from "typeorm";
 
 const DEFAULT_SINCE_DAYS = 35;
 
-@Injectable()
-export class MinersService {
-  constructor(private readonly dataSource: DataSource) {}
-
-  async getPullRequests(
-    githubId: string,
-    since: string,
-  ): Promise<{
-    github_id: string;
-    since: string;
-    generated_at: string;
-    pull_requests: unknown[];
-  }> {
-    const rows = await this.dataSource.query(
-      `
-      SELECT
+// Column list (everything between SELECT and FROM) for the PR query. Shared by
+// the scalar-`since` GET path and the per-repo `since` POST path so the two
+// stay identical.
+const PR_SELECT_COLUMNS = `
         LOWER(p.repo_full_name)         AS repo_full_name,
         p.pr_number,
         COALESCE(p.title, '')           AS title,
@@ -96,44 +84,10 @@ export class MinersService {
           FROM pr_linked_issues li
           WHERE li.repo_full_name = p.repo_full_name
             AND li.pr_number      = p.pr_number
-        ), '[]'::json) AS linked_issues
-      FROM pull_requests p
-      LEFT JOIN pr_review_summary rs
-        ON rs.repo_full_name = p.repo_full_name
-       AND rs.pr_number      = p.pr_number
-      LEFT JOIN repos r
-        ON r.repo_full_name = p.repo_full_name
-      WHERE p.author_github_id = $1
-        AND (
-          (p.state = 'OPEN'   AND p.created_at >= $2)
-          OR (p.state = 'MERGED' AND p.merged_at >= $2)
-          OR (p.state = 'CLOSED' AND p.created_at >= $2)
-        )
-      ORDER BY p.created_at DESC
-      `,
-      [githubId, since],
-    );
+        ), '[]'::json) AS linked_issues`;
 
-    return {
-      github_id: githubId,
-      since,
-      generated_at: new Date().toISOString(),
-      pull_requests: rows,
-    };
-  }
-
-  async getIssues(
-    githubId: string,
-    since: string | null,
-  ): Promise<{
-    github_id: string;
-    since: string | null;
-    generated_at: string;
-    issues: unknown[];
-  }> {
-    const rows = await this.dataSource.query(
-      `
-      SELECT
+// Column list for the issue query. Shared by the GET and POST paths.
+const ISSUE_SELECT_COLUMNS = `
         LOWER(i.repo_full_name)         AS repo_full_name,
         i.issue_number,
         COALESCE(i.title, '')           AS title,
@@ -204,7 +158,110 @@ export class MinersService {
             AND sp.author_github_id IS NOT NULL
             -- Skip corrupted MERGED-without-merged_at shape
             AND NOT (sp.state = 'MERGED' AND sp.merged_at IS NULL)
-        ) AS solving_pr
+        ) AS solving_pr`;
+
+@Injectable()
+export class MinersService {
+  constructor(private readonly dataSource: DataSource) {}
+
+  async getPullRequests(
+    githubId: string,
+    since: string,
+  ): Promise<{
+    github_id: string;
+    since: string;
+    generated_at: string;
+    pull_requests: unknown[];
+  }> {
+    const rows = await this.dataSource.query(
+      `
+      SELECT${PR_SELECT_COLUMNS}
+      FROM pull_requests p
+      LEFT JOIN pr_review_summary rs
+        ON rs.repo_full_name = p.repo_full_name
+       AND rs.pr_number      = p.pr_number
+      LEFT JOIN repos r
+        ON r.repo_full_name = p.repo_full_name
+      WHERE p.author_github_id = $1
+        AND (
+          (p.state = 'OPEN'   AND p.created_at >= $2)
+          OR (p.state = 'MERGED' AND p.merged_at >= $2)
+          OR (p.state = 'CLOSED' AND p.created_at >= $2)
+        )
+      ORDER BY p.created_at DESC
+      `,
+      [githubId, since],
+    );
+
+    return {
+      github_id: githubId,
+      since,
+      generated_at: new Date().toISOString(),
+      pull_requests: rows,
+    };
+  }
+
+  /**
+   * Per-repo variant of getPullRequests: each repo is windowed by its own
+   * `since`. `repoNames` and `sinceValues` are parallel arrays (same length and
+   * order); repo names are already lowercased and timestamps already ISO. The
+   * INNER JOIN to the unnested windows restricts results to the named repos.
+   */
+  async getPullRequestsByRepo(
+    githubId: string,
+    repoNames: string[],
+    sinceValues: string[],
+  ): Promise<{
+    github_id: string;
+    since: null;
+    generated_at: string;
+    pull_requests: unknown[];
+  }> {
+    const rows = await this.dataSource.query(
+      `
+      WITH windows AS (
+        SELECT * FROM unnest($2::text[], $3::timestamptz[]) AS t(repo_full_name, since)
+      )
+      SELECT${PR_SELECT_COLUMNS}
+      FROM pull_requests p
+      JOIN windows w
+        ON w.repo_full_name = LOWER(p.repo_full_name)
+      LEFT JOIN pr_review_summary rs
+        ON rs.repo_full_name = p.repo_full_name
+       AND rs.pr_number      = p.pr_number
+      LEFT JOIN repos r
+        ON r.repo_full_name = p.repo_full_name
+      WHERE p.author_github_id = $1
+        AND (
+          (p.state = 'OPEN'   AND p.created_at >= w.since)
+          OR (p.state = 'MERGED' AND p.merged_at >= w.since)
+          OR (p.state = 'CLOSED' AND p.created_at >= w.since)
+        )
+      ORDER BY p.created_at DESC
+      `,
+      [githubId, repoNames, sinceValues],
+    );
+
+    return {
+      github_id: githubId,
+      since: null,
+      generated_at: new Date().toISOString(),
+      pull_requests: rows,
+    };
+  }
+
+  async getIssues(
+    githubId: string,
+    since: string | null,
+  ): Promise<{
+    github_id: string;
+    since: string | null;
+    generated_at: string;
+    issues: unknown[];
+  }> {
+    const rows = await this.dataSource.query(
+      `
+      SELECT${ISSUE_SELECT_COLUMNS}
       FROM issues i
       WHERE i.author_github_id = $1
         AND (
@@ -219,6 +276,49 @@ export class MinersService {
     return {
       github_id: githubId,
       since,
+      generated_at: new Date().toISOString(),
+      issues: rows,
+    };
+  }
+
+  /**
+   * Per-repo variant of getIssues: each repo is windowed by its own `since`.
+   * `repoNames` / `sinceValues` are parallel arrays as in getPullRequestsByRepo.
+   * Every window `since` is a concrete timestamp (the controller rejects nulls),
+   * so the OPEN branch has no NULL fallback.
+   */
+  async getIssuesByRepo(
+    githubId: string,
+    repoNames: string[],
+    sinceValues: string[],
+  ): Promise<{
+    github_id: string;
+    since: null;
+    generated_at: string;
+    issues: unknown[];
+  }> {
+    const rows = await this.dataSource.query(
+      `
+      WITH windows AS (
+        SELECT * FROM unnest($2::text[], $3::timestamptz[]) AS t(repo_full_name, since)
+      )
+      SELECT${ISSUE_SELECT_COLUMNS}
+      FROM issues i
+      JOIN windows w
+        ON w.repo_full_name = LOWER(i.repo_full_name)
+      WHERE i.author_github_id = $1
+        AND (
+          (i.state = 'OPEN' AND i.created_at >= w.since)
+          OR (i.state = 'CLOSED' AND i.closed_at >= w.since)
+        )
+      ORDER BY i.created_at DESC
+      `,
+      [githubId, repoNames, sinceValues],
+    );
+
+    return {
+      github_id: githubId,
+      since: null,
       generated_at: new Date().toISOString(),
       issues: rows,
     };
