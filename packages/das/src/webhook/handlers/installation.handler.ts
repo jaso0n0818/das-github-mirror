@@ -38,22 +38,19 @@ export class InstallationHandler {
       payload.repositories ?? payload.repositories_added ?? [];
 
     for (const repo of repos) {
-      // Check existence first so we only set added_at on insert, not on every
-      // re-fire of installation.created / installation_repositories.added.
-      const existing = await this.repoRepo.findOneBy({
-        repoFullName: repo.full_name,
-      });
-      if (existing) {
-        await this.repoRepo.update(repo.full_name, {
-          installationId: String(installationId),
-        });
-      } else {
-        await this.repoRepo.insert({
+      // Atomic upsert: insert with addedAt on first encounter; on conflict only
+      // update installationId so addedAt is never overwritten on re-fires.
+      await this.repoRepo
+        .createQueryBuilder()
+        .insert()
+        .into(Repo)
+        .values({
           repoFullName: repo.full_name,
           installationId: String(installationId),
           addedAt: new Date().toISOString(),
-        });
-      }
+        })
+        .orUpdate(["installationId"], ["repoFullName"])
+        .execute();
       this.logger.log(`Tracking repo: ${repo.full_name}`);
     }
 
