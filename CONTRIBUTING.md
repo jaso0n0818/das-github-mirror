@@ -67,6 +67,14 @@ The repository runs an automated maintainer agent that may close PRs in the foll
 - Unresolved merge conflicts for 12+ hours with no resolution push
 - Requested changes from a maintainer for 12+ hours with no follow-up commits
 
+## Automatic Closures
+
+The maintainer bot enforces these rules without manual review. Contributions that violate them are closed automatically.
+
+### Open item limits
+
+Each contributor may have at most **2 open PRs** and **2 open issues** in this repository at any time. Submitting a 3rd of either type while at the cap closes the new one on submission. The limits apply independently — you can have 2 open PRs and 2 open issues at the same time.
+
 ## PR Labels
 
 Apply appropriate labels to help categorize and track your contribution:
