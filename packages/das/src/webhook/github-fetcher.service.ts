@@ -360,6 +360,126 @@ export class GitHubFetcherService implements OnModuleInit {
       .filter((number): number is number => typeof number === "number");
   }
 
+  // --- GraphQL: issue closure (which PR caused the current close) ---
+
+  /**
+   * Resolve the PR responsible for an issue's current closed state.
+   *
+   * Reads `ClosedEvent.closer` from the issue timeline and anchors to the
+   * issue's current `closedAt`, so reopen-then-reclose cycles attribute to
+   * the latest closer, not whichever PR first declared `Closes #N` in its
+   * body. Returns the PR number when the closer is a merged same-repo PR;
+   * `null` for manual closes, non-PR closers (commits, projects), or
+   * `NOT_PLANNED` closures.
+   *
+   * Source of truth for `issues.solved_by_pr`. Issue discovery and the
+   * issue-bounty solver lookup both read from this field, so they stay 1:1.
+   */
+  async fetchIssueClosingPr(
+    repoFullName: string,
+    issueNumber: number,
+  ): Promise<number | null> {
+    const [owner, repo] = repoFullName.split("/");
+    const token = await this.getTokenForRepo(repoFullName);
+
+    const query = `
+      query($owner: String!, $repo: String!, $issue: Int!) {
+        repository(owner: $owner, name: $repo) {
+          issue(number: $issue) {
+            closedAt
+            timelineItems(itemTypes: [CLOSED_EVENT], last: 20) {
+              nodes {
+                ... on ClosedEvent {
+                  createdAt
+                  stateReason
+                  closer {
+                    __typename
+                    ... on PullRequest {
+                      number
+                      merged
+                      state
+                      baseRepository { nameWithOwner }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const res = await this.githubFetch("https://api.github.com/graphql", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query,
+        variables: { owner, repo, issue: issueNumber },
+      }),
+    });
+
+    if (!res.ok) {
+      throw new Error(
+        `GraphQL issue closure fetch failed: ${res.status} ${await res.text()}`,
+      );
+    }
+
+    const body: any = await res.json();
+    this.assertNoGraphQLErrors(body, "Issue closure fetch");
+
+    const issue = body.data?.repository?.issue;
+    if (!issue) return null;
+
+    return this.selectClosingPrFromTimeline(repoFullName, issue);
+  }
+
+  private selectClosingPrFromTimeline(
+    repoFullName: string,
+    issue: {
+      closedAt: string | null;
+      timelineItems?: { nodes?: any[] };
+    },
+  ): number | null {
+    const closedAt = issue.closedAt;
+    if (!closedAt) return null;
+
+    const expectedRepo = repoFullName.toLowerCase();
+    const nodes = issue.timelineItems?.nodes ?? [];
+
+    // Walk newest to oldest, find the close event matching the issue's
+    // current closedAt. NOT_PLANNED closures (and anything else non-COMPLETED)
+    // don't attribute a solver.
+    for (let i = nodes.length - 1; i >= 0; i--) {
+      const ev = nodes[i];
+      if (!ev) continue;
+      const stateReason = ev.stateReason;
+      if (
+        stateReason != null &&
+        String(stateReason).toUpperCase() !== "COMPLETED"
+      ) {
+        continue;
+      }
+      if (ev.createdAt !== closedAt) continue;
+      const closer = ev.closer;
+      if (!closer || closer.__typename !== "PullRequest") return null;
+      if (
+        (closer.baseRepository?.nameWithOwner ?? "").toLowerCase() !==
+        expectedRepo
+      ) {
+        return null;
+      }
+      const merged =
+        closer.merged === true ||
+        String(closer.state ?? "").toUpperCase() === "MERGED";
+      if (!merged) return null;
+      return typeof closer.number === "number" ? closer.number : null;
+    }
+    return null;
+  }
+
   // --- PR files + contents (REST for list, batched GraphQL for contents) ---
 
   /**
@@ -952,6 +1072,26 @@ export class GitHubFetcherService implements OnModuleInit {
                   }
                 }
               }
+              closureTimeline: timelineItems(
+                itemTypes: [CLOSED_EVENT]
+                last: 20
+              ) {
+                nodes {
+                  ... on ClosedEvent {
+                    createdAt
+                    stateReason
+                    closer {
+                      __typename
+                      ... on PullRequest {
+                        number
+                        merged
+                        state
+                        baseRepository { nameWithOwner }
+                      }
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -1024,9 +1164,13 @@ export class GitHubFetcherService implements OnModuleInit {
           issueData.isTransferred = true;
         }
 
-        if (issue.state === "OPEN") {
-          issueData.solvedByPr = null;
-        }
+        issueData.solvedByPr =
+          issue.state === "CLOSED"
+            ? this.selectClosingPrFromTimeline(repoFullName, {
+                closedAt: issue.closedAt ?? null,
+                timelineItems: { nodes: issue.closureTimeline?.nodes ?? [] },
+              })
+            : null;
 
         await this.issueRepo.upsert(issueData, ["repoFullName", "issueNumber"]);
 

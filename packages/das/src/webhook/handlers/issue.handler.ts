@@ -1,8 +1,11 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-explicit-any */
 import { Injectable } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
+import { InjectQueue } from "@nestjs/bullmq";
 import { Repository } from "typeorm";
+import { Queue } from "bullmq";
 import { Issue, Repo } from "../../entities";
+import { FETCH_QUEUE, FETCH_JOBS } from "../../queue/constants";
 
 @Injectable()
 export class IssueHandler {
@@ -11,6 +14,8 @@ export class IssueHandler {
     private readonly issueRepo: Repository<Issue>,
     @InjectRepository(Repo)
     private readonly repoRepo: Repository<Repo>,
+    @InjectQueue(FETCH_QUEUE)
+    private readonly fetchQueue: Queue,
   ) {}
 
   async handle(payload: Record<string, any>): Promise<void> {
@@ -53,6 +58,23 @@ export class IssueHandler {
     }
 
     await this.issueRepo.upsert(data, ["repoFullName", "issueNumber"]);
+
+    // Resolve solver attribution from the issue's ClosedEvent timeline.
+    // The same primitive feeds issue discovery and the issue-bounty solver
+    // lookup so the two paths stay 1:1.
+    if (payload.action === "closed") {
+      await this.fetchQueue.add(
+        FETCH_JOBS.ISSUE_CLOSURE,
+        { repoFullName, issueNumber: issue.number },
+        {
+          jobId: `closure-${repoFullName}-${issue.number}`,
+          removeOnComplete: true,
+          removeOnFail: true,
+          attempts: 3,
+          backoff: { type: "exponential", delay: 5000 },
+        },
+      );
+    }
 
     const repoUpdate: Partial<Repo> = {
       lastEventAt: new Date().toISOString(),

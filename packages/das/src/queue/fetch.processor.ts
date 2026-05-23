@@ -1,7 +1,7 @@
 import { Processor, WorkerHost, InjectQueue } from "@nestjs/bullmq";
 import { Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, IsNull, Repository } from "typeorm";
+import { IsNull, Repository } from "typeorm";
 import { Job, Queue } from "bullmq";
 import { Issue, PullRequest } from "../entities";
 import { GitHubFetcherService } from "../webhook/github-fetcher.service";
@@ -29,12 +29,21 @@ export interface BackfillRepoJobData {
   days?: number;
 }
 
+export interface IssueClosureJobData {
+  repoFullName: string;
+  issueNumber: number;
+}
+
 interface PrFilesGeneration {
   headSha: string | null;
   baseSha: string | null;
 }
 
-type JobData = PrMetadataJobData | PrFilesJobData | BackfillRepoJobData;
+type JobData =
+  | PrMetadataJobData
+  | PrFilesJobData
+  | BackfillRepoJobData
+  | IssueClosureJobData;
 
 @Processor(FETCH_QUEUE, { concurrency: 5 })
 export class FetchProcessor extends WorkerHost {
@@ -68,9 +77,44 @@ export class FetchProcessor extends WorkerHost {
         await this.handleBackfill(repoFullName, days ?? DEFAULT_BACKFILL_DAYS);
         break;
       }
+      case FETCH_JOBS.ISSUE_CLOSURE: {
+        const { repoFullName, issueNumber } = job.data as IssueClosureJobData;
+        await this.handleIssueClosure(repoFullName, issueNumber);
+        break;
+      }
       default:
         this.logger.warn(`Unknown job name: ${job.name}`);
     }
+  }
+
+  private async handleIssueClosure(
+    repoFullName: string,
+    issueNumber: number,
+  ): Promise<void> {
+    this.logger.log(`Resolving closer for ${repoFullName}#${issueNumber}`);
+
+    const issue = await this.issueRepo.findOneBy({
+      repoFullName,
+      issueNumber,
+    });
+    if (!issue) return;
+
+    // Reopens already null out solvedByPr in the webhook handler; never
+    // re-fetch for an open issue.
+    if (issue.state !== "CLOSED") {
+      await this.issueRepo.update(
+        { repoFullName, issueNumber },
+        { solvedByPr: null },
+      );
+      return;
+    }
+
+    const solvedByPr = await this.fetcher.fetchIssueClosingPr(
+      repoFullName,
+      issueNumber,
+    );
+
+    await this.issueRepo.update({ repoFullName, issueNumber }, { solvedByPr });
   }
 
   private async handlePrMetadata(
@@ -78,11 +122,6 @@ export class FetchProcessor extends WorkerHost {
     prNumber: number,
   ): Promise<void> {
     this.logger.log(`Fetching PR metadata for ${repoFullName}#${prNumber}`);
-
-    const previousPr = await this.prRepo.findOneBy({ repoFullName, prNumber });
-    const previousClosingIssueNumbers = this.uniqueIssueNumbers(
-      previousPr?.closingIssueNumbers ?? [],
-    );
 
     const { closingIssueNumbers, body, lastEditedAt } =
       await this.fetcher.fetchPrMetadata(repoFullName, prNumber);
@@ -98,14 +137,10 @@ export class FetchProcessor extends WorkerHost {
       },
     );
 
-    const pr = await this.prRepo.findOneBy({ repoFullName, prNumber });
-    await this.reconcileSolvedIssueLinks(
-      repoFullName,
-      prNumber,
-      previousClosingIssueNumbers,
-      currentClosingIssueNumbers,
-      pr?.state === "MERGED",
-    );
+    // Issue solver attribution is closure-driven (ISSUE_CLOSURE jobs read
+    // ClosedEvent.closer). PR metadata only refreshes the PR-side text view
+    // of which issues this PR claims to close — it never writes
+    // issues.solved_by_pr.
   }
 
   private async handlePrFiles(data: PrFilesJobData): Promise<void> {
@@ -228,46 +263,6 @@ export class FetchProcessor extends WorkerHost {
       headSha: generation.headSha ?? IsNull(),
       baseSha: generation.baseSha ?? IsNull(),
     };
-  }
-
-  private async reconcileSolvedIssueLinks(
-    repoFullName: string,
-    prNumber: number,
-    previousIssueNumbers: number[],
-    currentIssueNumbers: number[],
-    isMerged: boolean,
-  ): Promise<void> {
-    const currentIssueNumberSet = new Set(currentIssueNumbers);
-    const staleIssueNumbers = previousIssueNumbers.filter(
-      (issueNumber) => !currentIssueNumberSet.has(issueNumber),
-    );
-
-    const clearIssueNumbers = isMerged
-      ? staleIssueNumbers
-      : this.uniqueIssueNumbers([
-          ...previousIssueNumbers,
-          ...currentIssueNumbers,
-        ]);
-
-    if (clearIssueNumbers.length > 0) {
-      await this.issueRepo.update(
-        {
-          repoFullName,
-          issueNumber: In(clearIssueNumbers),
-          solvedByPr: prNumber,
-        },
-        { solvedByPr: null },
-      );
-    }
-
-    if (!isMerged || currentIssueNumbers.length === 0) {
-      return;
-    }
-
-    await this.issueRepo.update(
-      { repoFullName, issueNumber: In(currentIssueNumbers) },
-      { solvedByPr: prNumber },
-    );
   }
 
   private uniqueIssueNumbers(issueNumbers: number[]): number[] {

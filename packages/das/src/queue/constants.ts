@@ -4,6 +4,7 @@ export const FETCH_JOBS = {
   PR_METADATA: "fetch-pr-metadata",
   PR_FILES: "fetch-pr-files",
   BACKFILL_REPO: "backfill-repo",
+  ISSUE_CLOSURE: "fetch-issue-closure",
 } as const;
 
 export const DEFAULT_BACKFILL_DAYS = 40;
