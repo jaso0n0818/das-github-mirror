@@ -118,7 +118,7 @@ export class PullRequestHandler {
         {
           jobId,
           removeOnComplete: true,
-          removeOnFail: 50,
+          removeOnFail: true,
           attempts: 3,
           backoff: { type: "exponential", delay: 5000 },
         },

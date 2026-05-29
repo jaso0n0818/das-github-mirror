@@ -245,7 +245,7 @@ export class FetchProcessor extends WorkerHost {
           expectedBaseSha,
         ),
         removeOnComplete: true,
-        removeOnFail: 50,
+        removeOnFail: true,
         attempts: 3,
         backoff: { type: "exponential", delay: 5000 },
       },
