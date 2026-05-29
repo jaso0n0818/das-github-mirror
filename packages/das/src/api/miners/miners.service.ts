@@ -131,6 +131,10 @@ const ISSUE_SELECT_COLUMNS = `
             'head_sha',          sp.head_sha,
             'base_sha',          sp.base_sha,
             'merge_base_sha',    sp.merge_base_sha,
+            'base_ref',          sp.base_ref,
+            'head_ref',          sp.head_ref,
+            'head_repo_full_name', LOWER(sp.head_repo_full_name),
+            'default_branch',    sr.default_branch,
             'labels', COALESCE((
               SELECT json_agg(json_build_object(
                 'name',              plt.label_name,
@@ -152,6 +156,8 @@ const ISSUE_SELECT_COLUMNS = `
           LEFT JOIN pr_review_summary rs
             ON rs.repo_full_name = sp.repo_full_name
            AND rs.pr_number      = sp.pr_number
+          LEFT JOIN repos sr
+            ON sr.repo_full_name = sp.repo_full_name
           WHERE sp.repo_full_name = i.repo_full_name
             AND sp.pr_number      = i.solved_by_pr
             -- Skip null-author solving PRs (no one to credit)
