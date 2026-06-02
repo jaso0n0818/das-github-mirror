@@ -368,9 +368,11 @@ export class GitHubFetcherService implements OnModuleInit {
    * Reads `ClosedEvent.closer` from the issue timeline and anchors to the
    * issue's current `closedAt`, so reopen-then-reclose cycles attribute to
    * the latest closer, not whichever PR first declared `Closes #N` in its
-   * body. Returns the PR number when the closer is a merged same-repo PR;
-   * `null` for manual closes, non-PR closers (commits, projects), or
-   * `NOT_PLANNED` closures.
+   * body. When no PR closer is recorded — e.g. the issue was closed manually
+   * rather than auto-closed by the merge — falls back to the issue's
+   * closing-PR references (a merged same-repo PR). Returns `null` for non-PR
+   * closures (commits, projects), `NOT_PLANNED` closures, or when neither
+   * source yields a qualifying merged same-repo PR.
    *
    * Source of truth for `issues.solved_by_pr`. Issue discovery and the
    * issue-bounty solver lookup both read from this field, so they stay 1:1.
@@ -387,6 +389,7 @@ export class GitHubFetcherService implements OnModuleInit {
         repository(owner: $owner, name: $repo) {
           issue(number: $issue) {
             closedAt
+            stateReason
             timelineItems(itemTypes: [CLOSED_EVENT], last: 20) {
               nodes {
                 ... on ClosedEvent {
@@ -402,6 +405,14 @@ export class GitHubFetcherService implements OnModuleInit {
                     }
                   }
                 }
+              }
+            }
+            closedByPullRequestsReferences(first: 10, includeClosedPrs: true) {
+              nodes {
+                number
+                merged
+                mergedAt
+                baseRepository { nameWithOwner }
               }
             }
           }
@@ -433,7 +444,7 @@ export class GitHubFetcherService implements OnModuleInit {
     const issue = body.data?.repository?.issue;
     if (!issue) return null;
 
-    return this.selectClosingPrFromTimeline(repoFullName, issue);
+    return this.selectClosingPr(repoFullName, issue);
   }
 
   private selectClosingPrFromTimeline(
@@ -478,6 +489,78 @@ export class GitHubFetcherService implements OnModuleInit {
       return typeof closer.number === "number" ? closer.number : null;
     }
     return null;
+  }
+
+  /**
+   * Resolve an issue's solving PR: prefer the authoritative
+   * `ClosedEvent.closer`, then fall back to the issue's closing-PR references.
+   * Shared by the webhook closure path and the backfill so both write
+   * `issues.solved_by_pr` identically.
+   */
+  private selectClosingPr(
+    repoFullName: string,
+    issue: {
+      closedAt: string | null;
+      stateReason?: string | null;
+      timelineItems?: { nodes?: any[] };
+      closedByPullRequestsReferences?: { nodes?: any[] };
+    },
+  ): number | null {
+    const viaCloser = this.selectClosingPrFromTimeline(repoFullName, issue);
+    if (viaCloser != null) return viaCloser;
+    return this.selectClosingPrFromClosingRefs(repoFullName, issue);
+  }
+
+  /**
+   * Fallback attribution from `closedByPullRequestsReferences` for issues that
+   * were closed without GitHub recording a PR closer (manual close, or a
+   * `Closes #N` keyword added after the PR merged). Gated to a COMPLETED
+   * closure and a merged same-repo PR that merged at or before the close —
+   * downstream gates (token threshold, one-issue-per-PR, author ≠ solver,
+   * branch eligibility) still apply on the consumer side.
+   */
+  private selectClosingPrFromClosingRefs(
+    repoFullName: string,
+    issue: {
+      closedAt: string | null;
+      stateReason?: string | null;
+      closedByPullRequestsReferences?: { nodes?: any[] };
+    },
+  ): number | null {
+    // Only COMPLETED closures attribute a solver — parity with the closer path.
+    if (
+      issue.stateReason != null &&
+      String(issue.stateReason).toUpperCase() !== "COMPLETED"
+    ) {
+      return null;
+    }
+
+    const closedAt = issue.closedAt ? Date.parse(issue.closedAt) : null;
+    const expectedRepo = repoFullName.toLowerCase();
+
+    const candidates = (issue.closedByPullRequestsReferences?.nodes ?? [])
+      .filter((n: any) => n?.merged === true)
+      .filter(
+        (n: any) =>
+          (n.baseRepository?.nameWithOwner ?? "").toLowerCase() ===
+          expectedRepo,
+      )
+      .filter((n: any) => {
+        // A PR can't have caused a close that predates its merge.
+        if (closedAt == null || !n.mergedAt) return true;
+        return Date.parse(n.mergedAt) <= closedAt;
+      });
+
+    if (candidates.length === 0) return null;
+
+    // Deterministic pick: latest merge on/before the close (closest cause),
+    // tie-broken by highest PR number.
+    candidates.sort(
+      (a: any, b: any) =>
+        (Date.parse(b.mergedAt ?? "") || 0) -
+          (Date.parse(a.mergedAt ?? "") || 0) || b.number - a.number,
+    );
+    return candidates[0].number;
   }
 
   // --- PR files + contents (REST for list, batched GraphQL for contents) ---
@@ -1092,6 +1175,14 @@ export class GitHubFetcherService implements OnModuleInit {
                   }
                 }
               }
+              closedByPullRequestsReferences(first: 10, includeClosedPrs: true) {
+                nodes {
+                  number
+                  merged
+                  mergedAt
+                  baseRepository { nameWithOwner }
+                }
+              }
             }
           }
         }
@@ -1166,9 +1257,13 @@ export class GitHubFetcherService implements OnModuleInit {
 
         issueData.solvedByPr =
           issue.state === "CLOSED"
-            ? this.selectClosingPrFromTimeline(repoFullName, {
+            ? this.selectClosingPr(repoFullName, {
                 closedAt: issue.closedAt ?? null,
+                stateReason: issue.stateReason ?? null,
                 timelineItems: { nodes: issue.closureTimeline?.nodes ?? [] },
+                closedByPullRequestsReferences: {
+                  nodes: issue.closedByPullRequestsReferences?.nodes ?? [],
+                },
               })
             : null;
 
