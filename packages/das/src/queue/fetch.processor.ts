@@ -2,6 +2,7 @@ import { Processor, WorkerHost, InjectQueue } from "@nestjs/bullmq";
 import { Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { IsNull, Repository } from "typeorm";
+import { QueryDeepPartialEntity } from "typeorm/query-builder/QueryPartialEntity";
 import { Job, Queue } from "bullmq";
 import { Issue, PullRequest } from "../entities";
 import { GitHubFetcherService } from "../webhook/github-fetcher.service";
@@ -123,19 +124,47 @@ export class FetchProcessor extends WorkerHost {
   ): Promise<void> {
     this.logger.log(`Fetching PR metadata for ${repoFullName}#${prNumber}`);
 
-    const { closingIssueNumbers, body, lastEditedAt } =
-      await this.fetcher.fetchPrMetadata(repoFullName, prNumber);
+    const {
+      closingIssueNumbers,
+      body,
+      lastEditedAt,
+      state,
+      mergedAt,
+      closedAt,
+      mergedByLogin,
+    } = await this.fetcher.fetchPrMetadata(repoFullName, prNumber);
     const currentClosingIssueNumbers =
       this.uniqueIssueNumbers(closingIssueNumbers);
 
-    await this.prRepo.update(
-      { repoFullName, prNumber },
-      {
-        closingIssueNumbers: currentClosingIssueNumbers,
-        body,
-        lastEditedAt,
-      },
-    );
+    // Re-assert authoritative state from GraphQL so a missed
+    // `pull_request.closed` webhook self-heals (see PrReconcileService, which
+    // enqueues this job for every still-open PR on a schedule). MERGED is
+    // terminal: never let an in-flight stale fetch revert a merged PR back to
+    // OPEN/CLOSED — only forward transitions are applied.
+    const existing = await this.prRepo.findOne({
+      where: { repoFullName, prNumber },
+      select: { state: true },
+    });
+    const applyState = !(existing?.state === "MERGED" && state !== "MERGED");
+
+    if (applyState && existing && existing.state !== state) {
+      this.logger.warn(
+        `State drift corrected for ${repoFullName}#${prNumber}: ` +
+          `${existing.state} → ${state} (missed webhook)`,
+      );
+    }
+
+    // Cast past the entity's non-null column types: merged_at/closed_at/
+    // merged_by_login are nullable in the DB, and writing null is correct
+    // (clears them on a reopened PR).
+    const update = {
+      closingIssueNumbers: currentClosingIssueNumbers,
+      body,
+      lastEditedAt,
+      ...(applyState ? { state, mergedAt, closedAt, mergedByLogin } : {}),
+    } as QueryDeepPartialEntity<PullRequest>;
+
+    await this.prRepo.update({ repoFullName, prNumber }, update);
 
     // Issue solver attribution is closure-driven (ISSUE_CLOSURE jobs read
     // ClosedEvent.closer). PR metadata only refreshes the PR-side text view

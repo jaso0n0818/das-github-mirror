@@ -287,16 +287,30 @@ export class GitHubFetcherService implements OnModuleInit {
     closingIssueNumbers: number[];
     body: string | null;
     lastEditedAt: string | null;
+    state: string;
+    mergedAt: string | null;
+    closedAt: string | null;
+    mergedByLogin: string | null;
   }> {
     const [owner, repo] = repoFullName.split("/");
     const token = await this.getTokenForRepo(repoFullName);
 
+    // `state`/`mergedAt`/`closedAt`/`mergedBy` are returned alongside the body
+    // so the metadata-fetch path can re-assert authoritative PR state — this is
+    // what lets a missed `pull_request.closed` webhook self-heal (the webhook
+    // handler is otherwise the only writer of state). GraphQL `state` is the
+    // source of truth (OPEN / CLOSED / MERGED), unlike REST which reports a
+    // merged PR as `closed` + `merged: true`.
     const query = `
       query($owner: String!, $repo: String!, $pr: Int!) {
         repository(owner: $owner, name: $repo) {
           pullRequest(number: $pr) {
             bodyText
             lastEditedAt
+            state
+            mergedAt
+            closedAt
+            mergedBy { login }
             closingIssuesReferences(first: 10) {
               nodes {
                 number
@@ -343,6 +357,10 @@ export class GitHubFetcherService implements OnModuleInit {
       ),
       body: pr.bodyText ?? null,
       lastEditedAt: pr.lastEditedAt ?? null,
+      state: pr.state,
+      mergedAt: pr.mergedAt ?? null,
+      closedAt: pr.closedAt ?? null,
+      mergedByLogin: pr.mergedBy?.login ?? null,
     };
   }
 
