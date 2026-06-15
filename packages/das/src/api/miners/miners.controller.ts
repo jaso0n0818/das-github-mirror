@@ -15,6 +15,7 @@ import {
   ApiTags,
 } from "@nestjs/swagger";
 import { MinersService } from "./miners.service";
+import { parsePaginationQuery } from "./pagination";
 
 // GitHub owner/repo pattern: alphanum + `.`, `_`, `-`, reasonable length.
 const REPO_FULL_NAME_PATTERN = /^[\w.-]{1,100}\/[\w.-]{1,100}$/;
@@ -122,13 +123,28 @@ export class MinersController {
     description:
       "ISO timestamp. Defaults to 35 days ago (midnight UTC) if omitted.",
   })
+  @ApiQuery({
+    name: "cursor",
+    required: false,
+    description:
+      "Opaque pagination cursor from a previous response's next_cursor field.",
+  })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    description: "Page size (default 50, max 200).",
+  })
   async getPullRequests(
     @Param("githubId") githubId: string,
     @Query("since") since?: string,
+    @Query("cursor") cursor?: string,
+    @Query("limit") limit?: string,
   ): Promise<unknown> {
+    const pagination = parsePaginationQuery(limit, cursor);
     return this.miners.getPullRequests(
       githubId,
       MinersService.resolveSince(since),
+      pagination,
     );
   }
 
@@ -169,11 +185,25 @@ export class MinersController {
       "ISO timestamp. When omitted, the response contains all currently-" +
       "OPEN issues with no time bound and no CLOSED history.",
   })
+  @ApiQuery({
+    name: "cursor",
+    required: false,
+    description:
+      "Opaque pagination cursor from a previous response's next_cursor field.",
+  })
+  @ApiQuery({
+    name: "limit",
+    required: false,
+    description: "Page size (default 50, max 200).",
+  })
   async getIssues(
     @Param("githubId") githubId: string,
     @Query("since") since?: string,
+    @Query("cursor") cursor?: string,
+    @Query("limit") limit?: string,
   ): Promise<unknown> {
-    return this.miners.getIssues(githubId, since ?? null);
+    const pagination = parsePaginationQuery(limit, cursor);
+    return this.miners.getIssues(githubId, since ?? null, pagination);
   }
 
   @Post(":githubId/issues")
