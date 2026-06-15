@@ -72,12 +72,14 @@ export class AdminController {
   }> {
     const repoFullName = validateRepoFullName(body?.repoFullName);
     const days = validateDays(body?.days);
+    const canonicalRepoFullName =
+      await this.resolveInstalledRepoFullName(repoFullName);
 
     await this.fetchQueue.add(
       FETCH_JOBS.BACKFILL_REPO,
-      { repoFullName, days },
+      { repoFullName: canonicalRepoFullName, days },
       {
-        jobId: `backfill-${repoFullName}-${Date.now()}`,
+        jobId: `backfill-${canonicalRepoFullName}-${Date.now()}`,
         removeOnComplete: true,
         removeOnFail: 50,
         attempts: 2,
@@ -85,7 +87,7 @@ export class AdminController {
       },
     );
 
-    return { enqueued: true, repoFullName, days };
+    return { enqueued: true, repoFullName: canonicalRepoFullName, days };
   }
 
   @Post("repos/register")
@@ -125,11 +127,14 @@ export class AdminController {
       );
     }
 
+    const canonicalRepoFullName =
+      await this.resolveInstalledRepoFullName(repoFullName);
+
     await this.fetchQueue.add(
       FETCH_JOBS.BACKFILL_REPO,
-      { repoFullName },
+      { repoFullName: canonicalRepoFullName },
       {
-        jobId: `backfill-${repoFullName}-${Date.now()}`,
+        jobId: `backfill-${canonicalRepoFullName}-${Date.now()}`,
         removeOnComplete: true,
         removeOnFail: 50,
         attempts: 2,
@@ -137,6 +142,31 @@ export class AdminController {
       },
     );
 
-    return { repoFullName, registered: true, backfillEnqueued: true };
+    return {
+      repoFullName: canonicalRepoFullName,
+      registered: true,
+      backfillEnqueued: true,
+    };
+  }
+
+  /** Resolve the canonical repos PK after a case-insensitive match. */
+  private async resolveInstalledRepoFullName(
+    repoFullName: string,
+  ): Promise<string> {
+    const repo = await this.repoRepo
+      .createQueryBuilder("repo")
+      .select(["repo.repoFullName"])
+      .where("LOWER(repo.repo_full_name) = LOWER(:repoFullName)", {
+        repoFullName,
+      })
+      .getOne();
+
+    if (!repo) {
+      throw new NotFoundException(
+        `Repo ${repoFullName} not found — install the GitHub App first`,
+      );
+    }
+
+    return repo.repoFullName;
   }
 }
