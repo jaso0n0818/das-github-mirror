@@ -25,6 +25,17 @@ interface ClosingIssueReference {
   repository?: { nameWithOwner?: string } | null;
 }
 
+/**
+ * A user's current maintainer role for a repo, sourced live from GitHub's
+ * collaborators/members APIs. `association` mirrors GitHub's author_association
+ * vocabulary so it can be written straight onto the stored activity rows.
+ */
+export interface MaintainerRole {
+  githubId: string;
+  login: string;
+  association: "OWNER" | "MEMBER" | "COLLABORATOR";
+}
+
 // Files larger than this are stored with null content (AST parsing is wasteful past this).
 const MAX_FILE_SIZE_BYTES = 1_000_000;
 
@@ -213,6 +224,94 @@ export class GitHubFetcherService implements OnModuleInit {
       throw new Error(`No installation for repo ${repoFullName}`);
     }
     return this.getInstallationToken(repo.installationId);
+  }
+
+  // --- REST: live maintainer roles (collaborators + org members) ---
+
+  /**
+   * Direct collaborators on the repo, returned as COLLABORATOR. The reconciler
+   * upgrades org members to MEMBER and the repo owner to OWNER. affiliation=direct
+   * excludes access inherited purely through org base permissions, so this is
+   * the set of users explicitly granted access to the repo.
+   */
+  async fetchRepoCollaborators(
+    repoFullName: string,
+  ): Promise<MaintainerRole[]> {
+    const token = await this.getTokenForRepo(repoFullName);
+    const [owner, repo] = repoFullName.split("/");
+    const users = await this.restGetAllPages(
+      `https://api.github.com/repos/${owner}/${repo}/collaborators?affiliation=direct&per_page=100`,
+      token,
+    );
+    return users.map((u: any) => ({
+      githubId: String(u.id),
+      login: u.login,
+      association: "COLLABORATOR" as const,
+    }));
+  }
+
+  /**
+   * Members of the owning org, returned as MEMBER. Resolves to [] when the
+   * owner is a user account — /orgs/{user}/members 404s, which is correct: a
+   * user-owned repo has only its owner and collaborators, no org members.
+   */
+  async fetchOrgMembers(repoFullName: string): Promise<MaintainerRole[]> {
+    const token = await this.getTokenForRepo(repoFullName);
+    const org = repoFullName.split("/")[0];
+    const users = await this.restGetAllPages(
+      `https://api.github.com/orgs/${org}/members?per_page=100`,
+      token,
+      { allow404: true },
+    );
+    return users.map((u: any) => ({
+      githubId: String(u.id),
+      login: u.login,
+      association: "MEMBER" as const,
+    }));
+  }
+
+  /**
+   * GET every page of a paginated REST list endpoint, following the Link
+   * header. Throws on any non-2xx (so callers fail closed) except a 404 when
+   * `allow404` is set, which resolves to an empty list.
+   */
+  private async restGetAllPages(
+    url: string,
+    token: string,
+    opts: { allow404?: boolean } = {},
+  ): Promise<any[]> {
+    const results: any[] = [];
+    let next: string | null = url;
+
+    while (next) {
+      const res = await this.githubFetch(next, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      });
+      if (res.status === 404 && opts.allow404) return [];
+      if (!res.ok) {
+        throw new Error(
+          `GitHub GET ${next} failed: ${res.status} ${await res.text()}`,
+        );
+      }
+      const page = await res.json();
+      if (Array.isArray(page)) results.push(...page);
+      next = this.parseNextLink(res.headers.get("link"));
+    }
+
+    return results;
+  }
+
+  private parseNextLink(linkHeader: string | null): string | null {
+    if (!linkHeader) return null;
+    for (const part of linkHeader.split(",")) {
+      const match = part.match(/<([^>]+)>;\s*rel="next"/);
+      if (match) return match[1];
+    }
+    return null;
   }
 
   // --- REST: compare API for merge-base ---
